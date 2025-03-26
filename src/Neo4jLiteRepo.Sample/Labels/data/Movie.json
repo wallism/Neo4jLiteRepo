@@ -1,0 +1,29 @@
+[
+  {
+    "Id": "1",
+    "Name": "Toy Story",
+    "Title": "Toy Story",
+    "Test": "test1",
+    "Released": 1995,
+    "SampleProperty": "Sample",
+    "Tagline": "The adventure takes off!",
+    "Genres": [ "Animation", "Comedy" ]
+  },
+  {
+    "Id": "2",
+    "Name": "Finding Nemo",
+    "Title": "Finding Nemo",
+    "Test": "test2",
+    "Released": 2003,
+    "Tagline": "There are 3.7 trillion fish in the ocean. They're looking for one.",
+    "Genres": [ "Animation", "Adventure" ]
+  },
+  {
+    "Id": "3",
+    "Name": "The Incredibles",
+    "Title": "The Incredibles",
+    "Released": 2004,
+    "Tagline": "No gut, no glory",
+    "Genres": [ "Animation", "Action" ]
+  }
+]
