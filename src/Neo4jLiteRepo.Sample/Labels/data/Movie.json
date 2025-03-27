@@ -1,7 +1,6 @@
 [
   {
     "Id": "1",
-    "Name": "Toy Story",
     "Title": "Toy Story",
     "Test": "test1",
     "Released": 1995,
@@ -11,7 +10,6 @@
   },
   {
     "Id": "2",
-    "Name": "Finding Nemo",
     "Title": "Finding Nemo",
     "Test": "test2",
     "Released": 2003,
@@ -20,7 +18,6 @@
   },
   {
     "Id": "3",
-    "Name": "The Incredibles",
     "Title": "The Incredibles",
     "Released": 2004,
     "Tagline": "No gut, no glory",

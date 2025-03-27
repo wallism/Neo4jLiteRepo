@@ -5,8 +5,10 @@ using Microsoft.Extensions.Logging;
 using Serilog;
 using Neo4j.Driver;
 using Neo4jLiteRepo;
+using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.Setup;
 using Neo4jLiteRepo.Sample.NodeServices;
+using Neo4jLiteRepo.NodeServices;
 
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
@@ -40,6 +42,8 @@ builder.Services.AddSingleton<IDriver>(_ =>
     return driver;
 });
 
+builder.Services.AddSingleton<IForceRefreshHandler, ForceRefreshHandler>();
+
 // register node services
 builder.Services.AddSingleton<INodeService, MovieNodeService>();
 builder.Services.AddSingleton<INodeService, GenreNodeService>();
@@ -50,16 +54,25 @@ builder.Services.AddSingleton<IDataSourceService, DataSourceService>();
 builder.Services.AddSingleton<IDataSeedService, DataSeedService>();
 
 
-
 // in this console app, I just want to seed the data. So I just get the required services and call the seed method
 var servicesProvider = builder.Services.BuildServiceProvider();
 var repo = servicesProvider.GetRequiredService<INeo4jGenericRepo>();
 var seedService = servicesProvider.GetRequiredService<IDataSeedService>();
 
-var result = await seedService.SeedAllData();
+try
+{
+    var result = await seedService.SeedAllData();
+}
+catch (Exception ex)
+{
+    Log.Error(ex, "Unhandled Ex");
+}
+finally
+{
+    Log.CloseAndFlush();
+    repo.Dispose();
 
+}
 
-Log.CloseAndFlush();
-repo.Dispose();
 
 Console.WriteLine("done!");

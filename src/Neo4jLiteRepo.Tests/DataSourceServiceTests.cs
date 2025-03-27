@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Neo4jLiteRepo.NodeServices;
 using Neo4jLiteRepo.Sample.Labels;
 using Neo4jLiteRepo.Sample.NodeServices;
 using NSubstitute;

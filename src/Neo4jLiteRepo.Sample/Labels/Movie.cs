@@ -5,8 +5,9 @@ namespace Neo4jLiteRepo.Sample.Labels
 {
     public class Movie : SampleGraphNode
     {
-        public override string Id { get; set; }
-        public override string Name { get; set; }
+        public override required string Id { get; set; }
+
+        [NodePrimaryKey]
         public string Title { get; set; }
 
         [NodeProperty(nameof(Released))]
@@ -19,7 +20,6 @@ namespace Neo4jLiteRepo.Sample.Labels
         public IEnumerable<string> Genres { get; set; }
 
 
-        public override string NodePrimaryKeyName => nameof(Title).ToGraphPropertyCasing();
         public override string BuildDisplayName() => Title;
     }
 } 

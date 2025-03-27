@@ -9,6 +9,7 @@ namespace Neo4jLiteRepo.Sample
     /// Useful for properties you always want to include (e.g. SampleProperty here)</remarks>
     public abstract class SampleGraphNode : GraphNode
     {
+
         [NodeProperty(nameof(SampleProperty))]
         public virtual string? SampleProperty { get; set; }
     }

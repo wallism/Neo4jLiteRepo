@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neo4jLiteRepo.Helpers;
+using Neo4jLiteRepo.NodeServices;
 
 namespace Neo4jLiteRepo;
 
@@ -20,8 +21,10 @@ public interface IDataSourceService
 }
 
 /// <summary>
-/// Load and store source data
+/// Load all node data from the data loaders into memory (allNodes)
 /// </summary>
+/// <remarks>put into memory for later use, to allow for different
+/// ways of processing the data. </remarks>
 public class DataSourceService(ILogger<DataSourceService> logger,
     IServiceProvider serviceProvider) : IDataSourceService
 {
@@ -49,7 +52,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     public GraphNode? GetSourceNodeFor(string key, string nodePrimaryKeyValue)
     {
         var sourceNodes = GetSourceNodesFor(key);
-        return sourceNodes.FirstOrDefault(n => n.GetNodePrimaryKeyValue() == nodePrimaryKeyValue);
+        return sourceNodes.FirstOrDefault(n => n.GetPrimaryKeyValue() == nodePrimaryKeyValue);
     }
 
     /// <summary>

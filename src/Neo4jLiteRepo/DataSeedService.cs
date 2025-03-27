@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Neo4jLiteRepo.NodeServices;
 
 namespace Neo4jLiteRepo
 {
@@ -34,9 +35,9 @@ namespace Neo4jLiteRepo
                 await SeedAllNodes().ConfigureAwait(false);
                 await SeedAllNodeRelationships().ConfigureAwait(false);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                logger.LogError("Error seeding data");
+                logger.LogError(ex, "Error seeding data");
                 return false;
             }
             logger.LogInformation("SeedAllData Complete!");

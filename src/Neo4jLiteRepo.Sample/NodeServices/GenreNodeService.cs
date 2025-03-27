@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Configuration;
+using Neo4jLiteRepo.NodeServices;
 using Neo4jLiteRepo.Sample.Labels;
 
 namespace Neo4jLiteRepo.Sample.NodeServices;

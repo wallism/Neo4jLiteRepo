@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Neo4j.Driver;
 using Neo4jLiteRepo.Attributes;
+using Neo4jLiteRepo.NodeServices;
 
 namespace Neo4jLiteRepo
 {
@@ -49,23 +50,23 @@ namespace Neo4jLiteRepo
 
         public async Task<bool> UpsertNode<T>(T node, IAsyncSession session) where T : GraphNode
         {
+            logger.LogInformation("({label}:{node})", node.LabelName, node.DisplayName);
+            var declaredNodeProperties = GetNodeProperties(node);
+
+            var query = $$"""
+                          MERGE (n:{{node.LabelName}} {{{node.GetPrimaryKeyName()}}: "{{node.GetPrimaryKeyValue()}}"})
+                          ON CREATE SET
+                            n.created = $Now
+                          SET
+                            n.id = "{{node.Id}}",
+                            n.{{node.NodeDisplayNameProperty}} = "{{node.DisplayName}}",
+                            {{declaredNodeProperties}},
+                          
+                            n.upserted = $Now
+
+                          """;
             try
             {
-                logger.LogInformation("({label}:{node})", node.LabelName, node.Name);
-                var declaredNodeProperties = GetNodeProperties(node);
-
-                var query = $$"""
-                              MERGE (n:{{node.LabelName}} {{{node.NodePrimaryKeyName}}: "{{node.GetNodePrimaryKeyValue()}}"})
-                              ON CREATE SET
-                                n.created = $Now
-                              SET
-                                n.id = "{{node.Id}}",
-                                n.{{node.NodeDisplayName}} = "{{node.DisplayName}}",
-                                {{declaredNodeProperties}},
-                              
-                                n.upserted = $Now
-
-                              """;
                 var result = await ExecuteWriteQuery(session, query);
                 return result;
             }
@@ -75,7 +76,7 @@ namespace Neo4jLiteRepo
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, $"UpsertNode {node.Name}");
+                logger.LogError(ex, $"UpsertNode {node.DisplayName} {query}", query);
                 // don't throw, try to process other nodes
                 return false;
             }
@@ -158,18 +159,18 @@ namespace Neo4jLiteRepo
                                 logger.LogError("toNode is null {NodeType}.", relatedNodeType);
                                 continue; // skip to next related node
                             }
-                            logger.LogInformation("{from}-[{relationship}]->{to}", relationshipName, fromNode.Name, toNode.Name);
+                            logger.LogInformation("{from}-[{relationship}]->{to}", relationshipName, fromNode.DisplayName, toNode.DisplayName);
 
                             var query = 
  $$"""
- MATCH (from: {{fromNode.LabelName}} {{{fromNode.NodePrimaryKeyName}}: "{{fromNode.GetNodePrimaryKeyValue()}}"})
- MATCH (to:   {{toNode.LabelName}} {{{toNode.NodePrimaryKeyName}}: "{{toNode.GetNodePrimaryKeyValue()}}" })
+ MATCH (from: {{fromNode.LabelName}} {{{fromNode.GetPrimaryKeyName()}}: "{{fromNode.GetPrimaryKeyValue()}}"})
+ MATCH (to:   {{toNode.LabelName}} {{{toNode.GetPrimaryKeyName()}}: "{{toNode.GetPrimaryKeyValue()}}" })
  MERGE (from)-[rel:{{relationshipName}}]->(to)
  """;
 
                             var result = await ExecuteWriteQuery(session, query);
                             if (!result)
-                                logger.LogWarning("Failed to create {relationship} {from} {to}", relationshipName, fromNode.Name, toNode.Name);
+                                logger.LogWarning("Failed to create {relationship} {from} {to}", relationshipName, fromNode.DisplayName, toNode.DisplayName);
                         }
                     }
                 }
@@ -235,9 +236,9 @@ namespace Neo4jLiteRepo
         {
             logger.LogInformation("CREATE UNIQUE CONSTRAINT {node}", node.LabelName);
             return $"""
-                    CREATE CONSTRAINT {node.LabelName.ToLower()}_{node.NodePrimaryKeyName.ToLower()}_is_unique IF NOT EXISTS
+                    CREATE CONSTRAINT {node.LabelName.ToLower()}_{node.GetPrimaryKeyName().ToLower()}_is_unique IF NOT EXISTS
                     FOR (n:{node.LabelName})
-                    REQUIRE n.{node.NodePrimaryKeyName} IS UNIQUE
+                    REQUIRE n.{node.GetPrimaryKeyName()} IS UNIQUE
                     """;
         }
 
