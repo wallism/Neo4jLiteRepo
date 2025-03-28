@@ -11,7 +11,7 @@ public abstract class GraphNode
     /// <summary>
     /// By default, the LabelName is the name of the implementation class
     /// </summary>
-    public virtual string LabelName 
+    public virtual string LabelName
         => GetType().Name.ToPascalCase();
 
 
@@ -20,15 +20,15 @@ public abstract class GraphNode
     /// </summary>
     /// <remarks>not necessary but it is useful to have a nice brief display field which tells you what the node is.</remarks>
     public virtual string NodeDisplayNameProperty => nameof(DisplayName).ToGraphPropertyCasing();
-    
+
     public string DisplayName => BuildDisplayName();
 
     /// <summary>
     /// Unique identifier for the node
     /// </summary>
     public virtual required string Id { get; set; }
-    
-    
+
+
     /// <summary>
     /// Override to manipulate the name before it is used as the display name
     /// </summary>
@@ -44,11 +44,11 @@ public abstract class GraphNode
     public string GetPrimaryKeyName()
     {
         var pkProperty = GetPrimaryKeyProperty();
-         
+
         return pkProperty.Name.ToGraphPropertyCasing();
     }
 
-    public virtual string? GetPrimaryKeyValue()
+    public string? GetPrimaryKeyValue()
     {
         var primaryKeyProperty = GetPrimaryKeyProperty();
 

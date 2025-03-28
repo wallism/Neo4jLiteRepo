@@ -11,4 +11,14 @@ public class GenreNodeService(IConfiguration config) : FileNodeService<Genre>(co
     /// </summary>
     public override Task<bool> RefreshNodeData() => Task.FromResult(true);
 
+    public override Task<IEnumerable<GraphNode>> LoadDataFromSource()
+    {
+        // source data is static json files for the sample
+        throw new NotImplementedException();
+    }
+
+    public override Task<bool> RefreshNodeRelationships(IEnumerable<GraphNode> data)
+    {
+        throw new NotImplementedException();
+    }
 }

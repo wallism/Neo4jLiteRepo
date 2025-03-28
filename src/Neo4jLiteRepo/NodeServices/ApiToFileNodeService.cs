@@ -1,5 +1,4 @@
-﻿using System.Text.Json;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Neo4jLiteRepo.Helpers;
 
 namespace Neo4jLiteRepo.NodeServices;
@@ -10,38 +9,56 @@ namespace Neo4jLiteRepo.NodeServices;
 /// but are working on getting your graph data structure setup.
 /// </summary>
 /// <typeparam name="T"></typeparam>
-public abstract class ApiToFileNodeService<T> : INodeService where T : GraphNode
+public abstract class ApiToFileNodeService<T> : FileNodeService<T> where T : GraphNode
 {
     private readonly IForceRefreshHandler _forceRefreshHandler;
 
     protected ApiToFileNodeService(IConfiguration config,
-        IForceRefreshHandler forceRefreshHandler)
+        IForceRefreshHandler forceRefreshHandler) : base(config)
     {
         _forceRefreshHandler = forceRefreshHandler;
         var sourceFilesRootPath = config["Neo4jLiteRepo:JsonFilePath"] ?? Environment.CurrentDirectory;
         FilePath = $"{Path.Combine(sourceFilesRootPath, typeof(T).Name)}.json";
-        
+
     }
 
 
     protected string FilePath { get; set; }
 
-    public async Task<IEnumerable<GraphNode>> LoadData()
+    public override async Task<IEnumerable<GraphNode>> LoadData()
     {
         // refresh file data if needed
         if (!File.Exists(FilePath) || _forceRefreshHandler.ShouldRefreshNode(typeof(T).Name))
             await RefreshNodeData();
 
         // load data from file
-        var json = await File.ReadAllTextAsync(FilePath);
-        var data = JsonSerializer.Deserialize<IEnumerable<T>>(json);
-        return data ?? [];
+        return await base.LoadData();
     }
+
+    public abstract override Task<IEnumerable<GraphNode>> LoadDataFromSource();
+
 
     /// <summary>
     /// This method is called to refresh the data from the API.
     /// </summary>
-    public abstract Task<bool> RefreshNodeData();
+    public override async Task<bool> RefreshNodeData()
+    {
+        var data = await LoadDataFromSource().ConfigureAwait(false);
+        var list = data.ToList();
+        await RefreshNodeRelationships(list).ConfigureAwait(false);
 
-    public virtual bool EnforceUniqueConstraint { get; set; } = true;
+        // save this data to a file
+        await SaveDataToFileAsync(list).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Default implementation does not build relationships.
+    /// If your node has not 'outgoing' relationships, you don't need to implement.
+    /// </summary>
+    public override Task<bool> RefreshNodeRelationships(IEnumerable<GraphNode> data)
+    {
+        return Task.FromResult(true);
+    }
+
 }

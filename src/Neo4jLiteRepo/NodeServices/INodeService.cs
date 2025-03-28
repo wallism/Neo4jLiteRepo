@@ -8,6 +8,7 @@
         /// </summary>
         /// <returns></returns>
         Task<IEnumerable<GraphNode>> LoadData();
+
         /// <summary>
         /// Refresh node data from 'your source'. 
         /// </summary>
@@ -17,6 +18,10 @@
         /// For production data or sensitive data, either cleanup the files
         /// immediately or change the mechanism to load the data into memory.</remarks>
         Task<bool> RefreshNodeData();
+
+        Task<IEnumerable<GraphNode>> LoadDataFromSource();
+
+        Task<bool> RefreshNodeRelationships(IEnumerable<GraphNode> data);
 
         bool EnforceUniqueConstraint { get; set; }
     }
