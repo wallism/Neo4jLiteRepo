@@ -1,6 +1,7 @@
 ﻿using Neo4jLiteRepo.Attributes;
 using Neo4jLiteRepo.Helpers;
 using System.Reflection;
+using Newtonsoft.Json;
 
 namespace Neo4jLiteRepo;
 
@@ -11,6 +12,7 @@ public abstract class GraphNode
     /// <summary>
     /// By default, the LabelName is the name of the implementation class
     /// </summary>
+    [JsonIgnore]
     public virtual string LabelName
         => GetType().Name.ToPascalCase();
 
@@ -19,8 +21,10 @@ public abstract class GraphNode
     /// Name of the "Display Name" property on the Node.
     /// </summary>
     /// <remarks>not necessary but it is useful to have a nice brief display field which tells you what the node is.</remarks>
+    [JsonIgnore]
     public virtual string NodeDisplayNameProperty => nameof(DisplayName).ToGraphPropertyCasing();
 
+    [JsonIgnore]
     public string DisplayName => BuildDisplayName();
 
     /// <summary>
@@ -70,11 +74,17 @@ public abstract class GraphNode
         // If we allow abstract classes, the attribute will likely be declared on concrete classes too,
         // then the logic that uses this attribute may not work as expected, because it returns the FIRST property it finds with this attribute.
         // If the base class is the ONLY declaration, then allow it.
-        if (pkProperties.Count() > 1 && pkProperties.Any(p => p.DeclaringType?.IsAbstract ?? false))
+        var propertyInfos = pkProperties as PropertyInfo[] 
+                            ?? pkProperties.ToArray();
+
+        if (propertyInfos.Count() > 1 && propertyInfos.Any(p => p.DeclaringType?.IsAbstract ?? false))
             throw new InvalidOperationException("NodePrimaryKeyAttribute cannot be applied to abstract classes.");
 
-        _primaryKeyProperty ??= pkProperties.First(p => p.GetCustomAttribute<NodePrimaryKeyAttribute>() != null);
+        _primaryKeyProperty ??= propertyInfos
+            .FirstOrDefault(p => p.GetCustomAttribute<NodePrimaryKeyAttribute>() != null);
 
+        if(_primaryKeyProperty is null)
+            throw new InvalidOperationException($"No property decorated with [NodePrimaryKey] found on {GetType().Name}.");
 
         return _primaryKeyProperty;
     }

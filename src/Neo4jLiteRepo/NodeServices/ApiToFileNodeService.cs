@@ -28,7 +28,9 @@ public abstract class ApiToFileNodeService<T> : FileNodeService<T> where T : Gra
     public override async Task<IEnumerable<GraphNode>> LoadData()
     {
         // refresh file data if needed
-        if (!File.Exists(FilePath) || _forceRefreshHandler.ShouldRefreshNode(typeof(T).Name))
+        if (!File.Exists(FilePath)
+            || new FileInfo(FilePath).Length < 128
+            || _forceRefreshHandler.ShouldRefreshNode(typeof(T).Name))
             await RefreshNodeData();
 
         // load data from file
@@ -56,6 +58,8 @@ public abstract class ApiToFileNodeService<T> : FileNodeService<T> where T : Gra
     /// Default implementation does not build relationships.
     /// If your node has not 'outgoing' relationships, you don't need to implement.
     /// </summary>
+    /// <remarks>The purpose of this function is to populate all properties decorated with the
+    /// Relationship Attribute, i.e. populate the list with the string PrimaryKeys.</remarks>
     public override Task<bool> RefreshNodeRelationships(IEnumerable<GraphNode> data)
     {
         return Task.FromResult(true);

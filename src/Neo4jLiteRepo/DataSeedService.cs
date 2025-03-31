@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neo4jLiteRepo.NodeServices;
 
@@ -10,11 +11,32 @@ namespace Neo4jLiteRepo
     }
 
 
-    public class DataSeedService(ILogger<DataSeedService> logger,
-        INeo4jGenericRepo graphRepo,
-        IDataSourceService dataSourceService,
-        IServiceProvider serviceProvider) : IDataSeedService
+    public class DataSeedService : IDataSeedService
     {
+        private readonly ILogger<DataSeedService> logger;
+        private readonly IConfiguration config;
+        private readonly INeo4jGenericRepo graphRepo;
+        private readonly IDataSourceService dataSourceService;
+        private readonly IServiceProvider serviceProvider;
+        private readonly List<string> _skipNodeTypes;
+
+        public DataSeedService(ILogger<DataSeedService> logger,
+            IConfiguration config,
+            INeo4jGenericRepo graphRepo,
+            IDataSourceService dataSourceService,
+            IServiceProvider serviceProvider)
+        {
+            this.logger = logger;
+            this.config = config;
+            this.graphRepo = graphRepo;
+            this.dataSourceService = dataSourceService;
+            this.serviceProvider = serviceProvider;
+
+
+            var section = config.GetSection("Neo4jLiteRepo:SkipNodeTypes");
+            _skipNodeTypes = section?.Get<List<string>>() ?? [];
+        }
+
         /// <summary>
         /// Load all data and seed both Nodes and Relationships into the graph.
         /// </summary>
@@ -26,7 +48,7 @@ namespace Neo4jLiteRepo
                 logger.LogError("Failed to load data. Exiting...");
                 return false;
             }
-            
+
             try
             {
                 // it might be a fresh database or we might have new Labels, ensure unique constraints
@@ -56,10 +78,13 @@ namespace Neo4jLiteRepo
             // then process the data
             foreach (var nodeByType in dataSourceService.GetAllSourceNodes())
             {
+                if (ShouldSkipNodeType(nodeByType.Key))
+                    continue;
                 await SeedDataNodes(nodeByType.Value).ConfigureAwait(false);
             }
 
         }
+
 
         private async Task SeedAllNodeRelationships()
         {
@@ -67,6 +92,8 @@ namespace Neo4jLiteRepo
             // then process the data
             foreach (var nodeByType in dataSourceService.GetAllSourceNodes())
             {
+                if (ShouldSkipNodeType(nodeByType.Key))
+                    continue;
                 await SeedNodeRelationships(nodeByType.Value).ConfigureAwait(false);
             }
         }
@@ -76,13 +103,13 @@ namespace Neo4jLiteRepo
             where T : GraphNode
         {
             var graphNodes = nodeData.ToList();
-            if(! graphNodes.Any())
+            if (!graphNodes.Any())
                 return false;
-            
+
             logger.LogInformation("Seeding {Label} {Count} nodes", graphNodes.First().GetType().Name.PadLeft(20), graphNodes.Count());
 
             await graphRepo.UpsertNodes(graphNodes).ConfigureAwait(false);
-            
+
             return true;
         }
 
@@ -90,15 +117,24 @@ namespace Neo4jLiteRepo
             where T : GraphNode
         {
             var graphNodes = nodeData.ToList();
-            
+
             await graphRepo.CreateRelationshipsAsync(graphNodes).ConfigureAwait(false);
-            
+
             return true;
         }
 
 
-        
-        
+        private bool ShouldSkipNodeType(string nodeType)
+        {
+            if (_skipNodeTypes.Contains(nodeType))
+            {
+                logger.LogWarning("Skipping {Label} nodes", nodeType);
+                return true;
+            }
+            return false;
+        }
+
+
         private List<Type> GetGraphNodeTypes()
         {
             return [];

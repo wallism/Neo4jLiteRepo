@@ -1,8 +1,5 @@
-﻿using System.Collections;
-using System.Collections.Generic;
-using System.Text.Json;
-using System.Xml;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json;
 
 namespace Neo4jLiteRepo.NodeServices;
 
@@ -26,7 +23,11 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
     public virtual async Task<IEnumerable<GraphNode>> LoadData()
     {
         var json = await File.ReadAllTextAsync(FilePath);
-        var data = JsonSerializer.Deserialize<IList<T>>(json);
+        var data = JsonConvert.DeserializeObject<IList<GraphNode>>(json, new JsonSerializerSettings
+        {
+            TypeNameHandling = TypeNameHandling.Auto // Ensures polymorphic deserialization
+        });
+
         return data ?? [];
     }
 
@@ -42,13 +43,12 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
 
     protected async Task SaveDataToFileAsync(IEnumerable<GraphNode> data)
     {
-        var json = JsonSerializer.Serialize(data, new JsonSerializerOptions
+        var json = JsonConvert.SerializeObject(data, Formatting.Indented, new JsonSerializerSettings
         {
-            MaxDepth = 20,
-            WriteIndented = true
+            TypeNameHandling = TypeNameHandling.Auto, // Enables polymorphic serialization
+            ContractResolver = new ExcludeTypeGenerationContractResolver()
         });
         await File.WriteAllTextAsync(FilePath, json);
     }
-
-
+    
 }
