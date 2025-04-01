@@ -62,7 +62,8 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     /// ways of processing the data. </remarks>
     public async Task<bool> LoadAllNodeDataAsync()
     {
-        var loaders = serviceProvider.GetServices<INodeService>();
+        var loaders = serviceProvider.GetServices<INodeService>()
+            .OrderBy(s => s.LoadPriority);
         foreach (var loader in loaders)
         {
             try

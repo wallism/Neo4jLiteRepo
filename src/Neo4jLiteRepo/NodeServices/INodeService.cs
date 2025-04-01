@@ -24,5 +24,12 @@
         Task<bool> RefreshNodeRelationships(IEnumerable<GraphNode> data);
 
         bool EnforceUniqueConstraint { get; set; }
+
+        /// <summary>
+        /// Higher priority services are loaded first.
+        /// </summary>
+        /// <remarks>Sometimes this is needed but try to avoid using it.
+        /// It's better (easier) if load order doesn't matter.</remarks>
+        int LoadPriority { get; }
     }
 }

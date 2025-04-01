@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Configuration;
+using Neo4jLiteRepo.Attributes;
 using Newtonsoft.Json;
 
 namespace Neo4jLiteRepo.NodeServices;
@@ -39,6 +40,7 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
 
     public virtual bool EnforceUniqueConstraint { get; set; } = true;
 
+    public virtual int LoadPriority => 99;
 
 
     protected async Task SaveDataToFileAsync(IEnumerable<GraphNode> data)
@@ -50,5 +52,6 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
         });
         await File.WriteAllTextAsync(FilePath, json);
     }
-    
+
+
 }
