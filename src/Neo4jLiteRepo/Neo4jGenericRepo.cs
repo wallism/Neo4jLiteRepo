@@ -27,7 +27,7 @@ namespace Neo4jLiteRepo
         {
             neo4jDriver.Dispose();
         }
-        
+
         protected string Now => DateTimeOffset.Now.ToLocalTime().ToString("O");
 
         public async Task<bool> UpsertNodes<T>(IEnumerable<T> nodes) where T : GraphNode
@@ -83,21 +83,50 @@ namespace Neo4jLiteRepo
         }
 
 
-        private static string GetNodeProperties<T>(T node) where T : GraphNode
+        private static string GetNodeProperties<T>(T node, int depth = 5) where T : GraphNode
         {
-            var properties = node.GetType().GetProperties()
-                .Where(p => p.GetCustomAttribute<NodePropertyAttribute>() != null)
-                .Select(p => new
-                {
-                    PropertyName = p.GetCustomAttribute<NodePropertyAttribute>().PropertyName,
-                    Value = p.GetValue(node)
-                });
-
-            var setClauses = properties.Select(p => $"n.{p.PropertyName} = \"{p.Value}\"");
-            var declaredNodeProperties = string.Join(",\n  ", setClauses);
-            return declaredNodeProperties;
+            var declaredNodeProperties = GetNodePropertiesRecursive(node, depth);
+            return string.Join(",\n  ", declaredNodeProperties);
         }
 
+        private static IEnumerable<string> GetNodePropertiesRecursive(object? obj, int depth)
+        {
+            if (obj == null || depth <= 0)
+                yield break;
+
+            var properties = obj.GetType().GetProperties()
+                .Where(p => p.GetCustomAttribute<NodePropertyAttribute>() != null);
+
+            foreach (var property in properties)
+            {
+                var value = property.GetValue(obj);
+                if (value != null && !IsSimpleType(value.GetType()))
+                {
+                    // Recurse into child objects
+                    foreach (var childProperty in GetNodePropertiesRecursive(value, depth - 1))
+                    {
+                        yield return childProperty;
+                    }
+                }
+
+                var attribute = property.GetCustomAttribute<NodePropertyAttribute>();
+                if (attribute == null)
+                    continue;
+                if (attribute.Exclude)
+                    continue;
+                var propertyName = attribute.PropertyName;
+                if (string.IsNullOrWhiteSpace(propertyName))
+                    continue;
+
+                // Add the current property
+                yield return $"n.{propertyName} = \"{value}\"";
+            }
+        }
+
+        private static bool IsSimpleType(Type type)
+        {
+            return type.IsPrimitive || type.IsEnum || type == typeof(string) || type == typeof(decimal);
+        }
 
         public async Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode
         {
@@ -154,14 +183,14 @@ namespace Neo4jLiteRepo
                         {
                             // relatedNode string indicates which GraphNode this node relates to
                             var toNode = dataSourceService.GetSourceNodeFor(relatedNodeType, toNodeName);
-                            if(toNode == null)
+                            if (toNode == null)
                             {
                                 logger.LogError("toNode is null {NodeType}.", relatedNodeType);
                                 continue; // skip to next related node
                             }
                             logger.LogInformation("{from}-[{relationship}]->{to}", relationshipName, fromNode.DisplayName, toNode.DisplayName);
 
-                            var query = 
+                            var query =
  $$"""
  MATCH (from: {{fromNode.LabelName}} {{{fromNode.GetPrimaryKeyName()}}: "{{fromNode.GetPrimaryKeyValue()}}"})
  MATCH (to:   {{toNode.LabelName}} {{{toNode.GetPrimaryKeyName()}}: "{{toNode.GetPrimaryKeyValue()}}" })
@@ -209,14 +238,14 @@ namespace Neo4jLiteRepo
             await using var session = neo4jDriver.AsyncSession();
             foreach (var nodeService in nodeServices)
             {
-                if(! nodeService.EnforceUniqueConstraint)
+                if (!nodeService.EnforceUniqueConstraint)
                     continue;
 
                 var type = nodeService.GetType();
 
                 // Get the base type (e.g FileNodeService<Movie>)
                 var baseType = type.BaseType;
-                if (baseType == null || !baseType.IsGenericType) 
+                if (baseType == null || !baseType.IsGenericType)
                     continue;
                 var genericType = baseType.GetGenericArguments()[0]; // Should be typeof(Movie)
                 if (Activator.CreateInstance(genericType) is GraphNode instance)
