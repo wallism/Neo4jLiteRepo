@@ -48,7 +48,7 @@ namespace Neo4jLiteRepo
                 logger.LogError("Failed to load data. Exiting...");
                 return false;
             }
-
+            
             try
             {
                 // it might be a fresh database or we might have new Labels, ensure unique constraints
@@ -78,7 +78,7 @@ namespace Neo4jLiteRepo
             // then process the data
             foreach (var nodeByType in dataSourceService.GetAllSourceNodes())
             {
-                if (ShouldSkipNodeType(nodeByType.Key))
+                if(ShouldSkipNodeType(nodeByType.Key))
                     continue;
                 await SeedDataNodes(nodeByType.Value).ConfigureAwait(false);
             }
@@ -103,13 +103,13 @@ namespace Neo4jLiteRepo
             where T : GraphNode
         {
             var graphNodes = nodeData.ToList();
-            if (!graphNodes.Any())
+            if(! graphNodes.Any())
                 return false;
-
+            
             logger.LogInformation("Seeding {Label} {Count} nodes", graphNodes.First().GetType().Name.PadLeft(20), graphNodes.Count());
 
             await graphRepo.UpsertNodes(graphNodes).ConfigureAwait(false);
-
+            
             return true;
         }
 
@@ -117,9 +117,9 @@ namespace Neo4jLiteRepo
             where T : GraphNode
         {
             var graphNodes = nodeData.ToList();
-
+            
             await graphRepo.CreateRelationshipsAsync(graphNodes).ConfigureAwait(false);
-
+            
             return true;
         }
 

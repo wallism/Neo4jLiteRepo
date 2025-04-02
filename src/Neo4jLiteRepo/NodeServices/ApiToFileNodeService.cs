@@ -19,7 +19,7 @@ public abstract class ApiToFileNodeService<T> : FileNodeService<T> where T : Gra
         _forceRefreshHandler = forceRefreshHandler;
         var sourceFilesRootPath = config["Neo4jLiteRepo:JsonFilePath"] ?? Environment.CurrentDirectory;
         FilePath = $"{Path.Combine(sourceFilesRootPath, typeof(T).Name)}.json";
-
+        
     }
 
 
@@ -55,7 +55,7 @@ public abstract class ApiToFileNodeService<T> : FileNodeService<T> where T : Gra
         var list = data.ToList();
         await RefreshNodeRelationships(list).ConfigureAwait(false);
 
-        if (saveToFile)// save this data to a file
+        if(saveToFile)// save this data to a file
             await SaveDataToFileAsync(list).ConfigureAwait(false);
         return list;
     }

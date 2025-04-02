@@ -35,7 +35,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         => allNodes;
 
 
-    public IEnumerable<GraphNode> GetSourceNodesFor(Type nodeType)
+    public IEnumerable<GraphNode> GetSourceNodesFor(Type nodeType) 
         => GetSourceNodesFor(nodeType.Name);
 
 
@@ -86,7 +86,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
 
                 // key could exist, ignore if it does (data added to allNodes elsewhere, probably during a data refresh).
                 var addResult = allNodes.TryAdd(loader.GetNodeKeyName(), nodes);
-                if (!addResult)
+                if(!addResult)
                     logger.LogWarning("Failed to add {nodeType} to allNodes (may already exist?)", loader.GetNodeKeyName());
             }
             catch (Exception ex)

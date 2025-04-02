@@ -10,8 +10,8 @@ namespace Neo4jLiteRepo.Helpers
         /// </summary>
         public static string ToGraphPropertyCasing(this string original)
         {
-            return string.IsNullOrWhiteSpace(original)
-                ? string.Empty
+            return string.IsNullOrWhiteSpace(original) 
+                ? string.Empty 
                 : original.ToCamelCase();
         }
 

@@ -27,7 +27,7 @@ namespace Neo4jLiteRepo
         {
             neo4jDriver.Dispose();
         }
-
+        
         protected string Now => DateTimeOffset.Now.ToLocalTime().ToString("O");
 
         public async Task<bool> UpsertNodes<T>(IEnumerable<T> nodes) where T : GraphNode
@@ -112,7 +112,7 @@ namespace Neo4jLiteRepo
                 var attribute = property.GetCustomAttribute<NodePropertyAttribute>();
                 if (attribute == null)
                     continue;
-                if (attribute.Exclude)
+                if(attribute.Exclude)
                     continue;
                 var propertyName = attribute.PropertyName;
                 if (string.IsNullOrWhiteSpace(propertyName))
@@ -155,7 +155,8 @@ namespace Neo4jLiteRepo
             foreach (var property in properties)
             {
                 var relationshipAttribute = property.GetCustomAttributes()
-                    .FirstOrDefault(attr => attr.GetType().IsGenericType && attr.GetType().GetGenericTypeDefinition() == typeof(NodeRelationshipAttribute<>));
+                    .FirstOrDefault(attr => attr.GetType().IsGenericType && attr.GetType()
+                        .GetGenericTypeDefinition() == typeof(NodeRelationshipAttribute<>));
 
 
                 if (relationshipAttribute != null)
@@ -183,14 +184,14 @@ namespace Neo4jLiteRepo
                         {
                             // relatedNode string indicates which GraphNode this node relates to
                             var toNode = dataSourceService.GetSourceNodeFor(relatedNodeType, toNodeName);
-                            if (toNode == null)
+                            if(toNode == null)
                             {
                                 logger.LogError("toNode is null {NodeType}.", relatedNodeType);
                                 continue; // skip to next related node
                             }
                             logger.LogInformation("{from}-[{relationship}]->{to}", relationshipName, fromNode.DisplayName, toNode.DisplayName);
 
-                            var query =
+                            var query = 
  $$"""
  MATCH (from: {{fromNode.LabelName}} {{{fromNode.GetPrimaryKeyName()}}: "{{fromNode.GetPrimaryKeyValue()}}"})
  MATCH (to:   {{toNode.LabelName}} {{{toNode.GetPrimaryKeyName()}}: "{{toNode.GetPrimaryKeyValue()}}" })
@@ -238,14 +239,14 @@ namespace Neo4jLiteRepo
             await using var session = neo4jDriver.AsyncSession();
             foreach (var nodeService in nodeServices)
             {
-                if (!nodeService.EnforceUniqueConstraint)
+                if(! nodeService.EnforceUniqueConstraint)
                     continue;
 
                 var type = nodeService.GetType();
 
                 // Get the base type (e.g FileNodeService<Movie>)
                 var baseType = type.BaseType;
-                if (baseType == null || !baseType.IsGenericType)
+                if (baseType == null || !baseType.IsGenericType) 
                     continue;
                 var genericType = baseType.GetGenericArguments()[0]; // Should be typeof(Movie)
                 if (Activator.CreateInstance(genericType) is GraphNode instance)
