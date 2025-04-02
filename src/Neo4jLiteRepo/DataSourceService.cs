@@ -18,6 +18,7 @@ public interface IDataSourceService
     IEnumerable<GraphNode> GetSourceNodesFor(string key);
     Dictionary<string, IEnumerable<GraphNode>> GetAllSourceNodes();
     GraphNode? GetSourceNodeFor(string key, string nodePrimaryKeyValue);
+    void AddSourceNodes<T>(List<T> nodes) where T : GraphNode;
 }
 
 /// <summary>
@@ -34,7 +35,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         => allNodes;
 
 
-    public IEnumerable<GraphNode> GetSourceNodesFor(Type nodeType) 
+    public IEnumerable<GraphNode> GetSourceNodesFor(Type nodeType)
         => GetSourceNodesFor(nodeType.Name);
 
 
@@ -56,6 +57,19 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     }
 
     /// <summary>
+    /// Add nodes to any existing nodes for the given key.
+    /// For edge cases where you need to add nodes to the data source. Normally this is done by the data loaders LoadData.
+    /// </summary>
+    public void AddSourceNodes<T>(List<T> nodes) where T : GraphNode
+    {
+        var key = typeof(T).Name;
+        allNodes.TryGetValue(key, out var allExisting);
+        allNodes[key] = allExisting != null
+            ? allExisting.Concat(nodes).ToList()
+            : nodes;
+    }
+
+    /// <summary>
     /// Load all node data from the data loaders into memory (allNodes)
     /// </summary>
     /// <remarks>put into memory for later use, to allow for different
@@ -69,7 +83,11 @@ public class DataSourceService(ILogger<DataSourceService> logger,
             try
             {
                 var nodes = await loader.LoadData().ConfigureAwait(false);
-                allNodes.Add(loader.GetNodeKeyName(), nodes);
+
+                // key could exist, ignore if it does (data added to allNodes elsewhere, probably during a data refresh).
+                var addResult = allNodes.TryAdd(loader.GetNodeKeyName(), nodes);
+                if (!addResult)
+                    logger.LogWarning("Failed to add {nodeType} to allNodes (may already exist?)", loader.GetNodeKeyName());
             }
             catch (Exception ex)
             {

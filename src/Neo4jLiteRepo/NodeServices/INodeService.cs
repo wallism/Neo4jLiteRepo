@@ -17,7 +17,7 @@
         /// this method to load that data into a local file.
         /// For production data or sensitive data, either cleanup the files
         /// immediately or change the mechanism to load the data into memory.</remarks>
-        Task<bool> RefreshNodeData();
+        Task<IList<GraphNode>> RefreshNodeData(bool saveToFile = true);
 
         Task<IEnumerable<GraphNode>> LoadDataFromSource();
 
@@ -31,5 +31,13 @@
         /// <remarks>Sometimes this is needed but try to avoid using it.
         /// It's better (easier) if load order doesn't matter.</remarks>
         int LoadPriority { get; }
+
+        /// <summary>
+        /// If data is refreshed from an alternative source (e.g. an API)
+        /// Set to true to use the refreshed data when loading data.
+        /// If false, the data will be loaded from the local file (after it has been saved to that file during refresh)
+        /// </summary>
+        bool UseRefreshDataOnLoadData { get; }
+
     }
 }

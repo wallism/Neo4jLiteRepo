@@ -31,11 +31,17 @@ public abstract class ApiToFileNodeService<T> : FileNodeService<T> where T : Gra
         if (!File.Exists(FilePath)
             || new FileInfo(FilePath).Length < 128
             || _forceRefreshHandler.ShouldRefreshNode(typeof(T).Name))
-            await RefreshNodeData();
+        {
+            var result = await RefreshNodeData();
+            if (UseRefreshDataOnLoadData) // don't reload from the file
+                return result;
+        }
 
         // load data from file
         return await base.LoadData();
     }
+
+    public override bool UseRefreshDataOnLoadData => true;
 
     public abstract override Task<IEnumerable<GraphNode>> LoadDataFromSource();
 
@@ -43,20 +49,20 @@ public abstract class ApiToFileNodeService<T> : FileNodeService<T> where T : Gra
     /// <summary>
     /// This method is called to refresh the data from the API.
     /// </summary>
-    public override async Task<bool> RefreshNodeData()
+    public override async Task<IList<GraphNode>> RefreshNodeData(bool saveToFile = true)
     {
         var data = await LoadDataFromSource().ConfigureAwait(false);
         var list = data.ToList();
         await RefreshNodeRelationships(list).ConfigureAwait(false);
 
-        // save this data to a file
-        await SaveDataToFileAsync(list).ConfigureAwait(false);
-        return true;
+        if (saveToFile)// save this data to a file
+            await SaveDataToFileAsync(list).ConfigureAwait(false);
+        return list;
     }
 
     /// <summary>
     /// Default implementation does not build relationships.
-    /// If your node has not 'outgoing' relationships, you don't need to implement.
+    /// If your node has no 'outgoing' relationships, you don't need to implement.
     /// </summary>
     /// <remarks>The purpose of this function is to populate all properties decorated with the
     /// Relationship Attribute, i.e. populate the list with the string PrimaryKeys.</remarks>

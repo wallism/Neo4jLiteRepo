@@ -9,7 +9,7 @@ public class GenreNodeService(IConfiguration config) : FileNodeService<Genre>(co
     /// <summary>
     /// For the Sample, the data is static, so no need to refresh
     /// </summary>
-    public override Task<bool> RefreshNodeData() => Task.FromResult(true);
+    public override Task<IList<GraphNode>> RefreshNodeData(bool saveToFile = true) => new(() => []);
 
     public override Task<IEnumerable<GraphNode>> LoadDataFromSource()
     {

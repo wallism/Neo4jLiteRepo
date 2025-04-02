@@ -32,7 +32,7 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
         return data ?? [];
     }
 
-    public abstract Task<bool> RefreshNodeData();
+    public abstract Task<IList<GraphNode>> RefreshNodeData(bool saveToFile = true);
 
     public abstract Task<IEnumerable<GraphNode>> LoadDataFromSource();
 
@@ -41,6 +41,7 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
     public virtual bool EnforceUniqueConstraint { get; set; } = true;
 
     public virtual int LoadPriority => 99;
+    public virtual bool UseRefreshDataOnLoadData => false;
 
 
     protected async Task SaveDataToFileAsync(IEnumerable<GraphNode> data)

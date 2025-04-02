@@ -9,7 +9,7 @@ namespace Neo4jLiteRepo.Sample.NodeServices
         /// <summary>
         /// For the Sample, the data is static, so no need to refresh
         /// </summary>
-        public override Task<bool> RefreshNodeData() => Task.FromResult(true);
+        public override Task<IList<GraphNode>> RefreshNodeData(bool saveToFile = true) => new(() => []);
 
         public override Task<IEnumerable<GraphNode>> LoadDataFromSource()
         {
