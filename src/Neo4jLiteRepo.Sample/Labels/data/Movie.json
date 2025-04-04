@@ -5,6 +5,7 @@
     "Title": "Toy Story",
     "Test": "test1",
     "Released": 1995,
+    "TestPassword": "testpasswordInJson",
     "SampleProperty": "Sample",
     "Tagline": "The adventure takes off!",
     "Genres": [ "Animation", "Comedy" ]

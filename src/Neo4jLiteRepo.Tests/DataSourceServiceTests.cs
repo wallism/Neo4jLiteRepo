@@ -83,7 +83,7 @@ namespace Neo4jLiteRepo.Tests
             await _dataSourceService.LoadAllNodeDataAsync();
 
             // Act
-            var result = _dataSourceService.GetSourceNodesFor("Movie");
+            var result = _dataSourceService.GetSourceNodesFor<Movie>();
 
             // Assert 
             Assert.That(result.Count(), Is.EqualTo(3));
@@ -96,7 +96,7 @@ namespace Neo4jLiteRepo.Tests
             await _dataSourceService.LoadAllNodeDataAsync();
 
             // Act
-            var result = _dataSourceService.GetSourceNodesFor(typeof(Genre));
+            var result = _dataSourceService.GetSourceNodesFor<Genre>();
 
             // Assert
             Assert.That(result.Count(), Is.EqualTo(4));
@@ -110,7 +110,7 @@ namespace Neo4jLiteRepo.Tests
             await _dataSourceService.LoadAllNodeDataAsync();
 
             // Act
-            var result = _dataSourceService.GetSourceNodeFor("Movie", "Finding Nemo");
+            var result = _dataSourceService.GetSourceNodeFor<Movie>("Movie", "Finding Nemo");
 
             // Assert
             Assert.That(result, Is.Not.Null);

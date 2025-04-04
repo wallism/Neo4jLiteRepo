@@ -16,7 +16,9 @@ namespace Neo4jLiteRepo.Sample.Labels
         [NodeProperty(nameof(Description))]
         public string Description { get; set; }
         
-
+        [NodeProperty(nameof(MySecretTest))]
+        public string MySecretTest { get; set; }
+        
         [NodeRelationship<Movie>("HAS_MOVIE")] 
         public IEnumerable<string> Movies { get; set; }
 

@@ -53,6 +53,7 @@ builder.Services.AddSingleton<INeo4jGenericRepo, Neo4jGenericRepo>();
 builder.Services.AddSingleton<IDataSourceService, DataSourceService>();
 builder.Services.AddSingleton<IDataSeedService, DataSeedService>();
 
+ConfigHelper.Initialize(builder.Configuration);
 
 // in this console app, I just want to seed the data. So I just get the required services and call the seed method
 var servicesProvider = builder.Services.BuildServiceProvider();

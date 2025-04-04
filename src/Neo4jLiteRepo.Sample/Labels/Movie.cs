@@ -16,6 +16,9 @@ namespace Neo4jLiteRepo.Sample.Labels
         [NodeProperty(nameof(Tagline))]
         public string Tagline { get; set; }
 
+        [NodeProperty(nameof(TestPassword))]
+        public string TestPassword { get; set; }
+
         [NodeRelationship<Genre>("IN_GENRE")]
         public IEnumerable<string> Genres { get; set; }
 

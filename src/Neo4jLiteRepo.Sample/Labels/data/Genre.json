@@ -4,6 +4,7 @@
     "Id": "1",
     "Name": "Animation",
     "Description": "Animated movies",
+    "MySecretTest": "secretinjson",
     "Movies": [ "Finding Nemo", "The Incredibles", "Toy Story" ]
   },
   {

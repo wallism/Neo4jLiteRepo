@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Neo4j.Driver;
 using Neo4jLiteRepo.Attributes;
+using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.NodeServices;
 
 namespace Neo4jLiteRepo
@@ -119,7 +120,7 @@ namespace Neo4jLiteRepo
                     continue;
 
                 // Add the current property
-                yield return $"n.{propertyName} = \"{value}\"";
+                yield return $"n.{propertyName} = \"{value?.AutoRedact(propertyName)}\"";
             }
         }
 
@@ -186,7 +187,7 @@ namespace Neo4jLiteRepo
                             var toNode = dataSourceService.GetSourceNodeFor<GraphNode>(relatedNodeType, toNodeName);
                             if(toNode == null)
                             {
-                                logger.LogError("toNode is null {NodeType}.", relatedNodeType);
+                                logger.LogError("toNode is null {NodeType} {toNodeName} (in a sub that is not loaded?)", relatedNodeType, toNodeName);
                                 continue; // skip to next related node
                             }
                             logger.LogInformation("{from}-[{relationship}]->{to}", relationshipName, fromNode.DisplayName, toNode.DisplayName);
