@@ -14,10 +14,14 @@ public interface IDataSourceService
     /// ways of processing the data. </remarks>
     Task<bool> LoadAllNodeDataAsync();
 
-    IEnumerable<T> GetSourceNodesFor<T>(Type nodeType) where T : GraphNode;
-    IEnumerable<T> GetSourceNodesFor<T>(string key) where T : GraphNode;
     Dictionary<string, IEnumerable<GraphNode>> GetAllSourceNodes();
+
+    IEnumerable<T> GetSourceNodesFor<T>() where T : GraphNode;
+    IEnumerable<T> GetSourceNodesFor<T>(string key) where T : GraphNode;
+
+    T? GetSourceNodeFor<T>(string nodePrimaryKeyValue) where T : GraphNode;
     T? GetSourceNodeFor<T>(string key, string nodePrimaryKeyValue) where T : GraphNode;
+
     void AddSourceNodes<T>(List<T> nodes) where T : GraphNode;
 }
 
@@ -34,11 +38,17 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     public Dictionary<string, IEnumerable<GraphNode>> GetAllSourceNodes()
         => allNodes;
 
+    
+    public IEnumerable<T> GetSourceNodesFor<T>() where T : GraphNode
+    {
+        var key = typeof(T).Name;
+        return GetSourceNodesFor<T>(key);
+    }
 
-    public IEnumerable<T> GetSourceNodesFor<T>(Type nodeType) where T : GraphNode
-        => GetSourceNodesFor<T>(nodeType.Name);
-
-
+    /// <summary>
+    /// Get Source Nodes of a specific type. "key" is the type of T, e.g. "WebApp". This overload would be redundant but it is here
+    /// to allow a call using reflection (e.g. in Neo4jGenericRepo
+    /// </summary>
     public IEnumerable<T> GetSourceNodesFor<T>(string key) where T : GraphNode
     {
         if (allNodes.TryGetValue(key, out var sourceNodesFor))
@@ -50,6 +60,16 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         return [];
     }
 
+    public T? GetSourceNodeFor<T>(string nodePrimaryKeyValue) where T : GraphNode
+    {
+        var key = typeof(T).Name;
+        return GetSourceNodeFor<T>(key, nodePrimaryKeyValue);
+    }
+
+    /// <summary>
+    /// Get a specific Node. "key" is the type of T, e.g. "WebApp". This overload would be redundant but it is here
+    /// to allow a call using reflection (e.g. in Neo4jGenericRepo
+    /// </summary>
     public T? GetSourceNodeFor<T>(string key, string nodePrimaryKeyValue) where T : GraphNode
     {
         var sourceNodes = GetSourceNodesFor<T>(key);
