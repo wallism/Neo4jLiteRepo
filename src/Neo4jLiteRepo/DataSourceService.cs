@@ -14,10 +14,10 @@ public interface IDataSourceService
     /// ways of processing the data. </remarks>
     Task<bool> LoadAllNodeDataAsync();
 
-    IEnumerable<GraphNode> GetSourceNodesFor(Type nodeType);
-    IEnumerable<GraphNode> GetSourceNodesFor(string key);
+    IEnumerable<T> GetSourceNodesFor<T>(Type nodeType) where T : GraphNode;
+    IEnumerable<T> GetSourceNodesFor<T>(string key) where T : GraphNode;
     Dictionary<string, IEnumerable<GraphNode>> GetAllSourceNodes();
-    GraphNode? GetSourceNodeFor(string key, string nodePrimaryKeyValue);
+    T? GetSourceNodeFor<T>(string key, string nodePrimaryKeyValue) where T : GraphNode;
     void AddSourceNodes<T>(List<T> nodes) where T : GraphNode;
 }
 
@@ -35,24 +35,24 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         => allNodes;
 
 
-    public IEnumerable<GraphNode> GetSourceNodesFor(Type nodeType) 
-        => GetSourceNodesFor(nodeType.Name);
+    public IEnumerable<T> GetSourceNodesFor<T>(Type nodeType) where T : GraphNode
+        => GetSourceNodesFor<T>(nodeType.Name);
 
 
-    public IEnumerable<GraphNode> GetSourceNodesFor(string key)
+    public IEnumerable<T> GetSourceNodesFor<T>(string key) where T : GraphNode
     {
         if (allNodes.TryGetValue(key, out var sourceNodesFor))
         {
-            return sourceNodesFor;
+            return sourceNodesFor.OfType<T>();
         }
 
         logger.LogWarning("{key} not found in allNodes source data", key);
         return [];
     }
 
-    public GraphNode? GetSourceNodeFor(string key, string nodePrimaryKeyValue)
+    public T? GetSourceNodeFor<T>(string key, string nodePrimaryKeyValue) where T : GraphNode
     {
-        var sourceNodes = GetSourceNodesFor(key);
+        var sourceNodes = GetSourceNodesFor<T>(key);
         return sourceNodes.FirstOrDefault(n => n.GetPrimaryKeyValue() == nodePrimaryKeyValue);
     }
 

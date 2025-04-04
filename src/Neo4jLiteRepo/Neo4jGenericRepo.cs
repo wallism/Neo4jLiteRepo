@@ -183,7 +183,7 @@ namespace Neo4jLiteRepo
                         foreach (var toNodeName in relatedNodes)
                         {
                             // relatedNode string indicates which GraphNode this node relates to
-                            var toNode = dataSourceService.GetSourceNodeFor(relatedNodeType, toNodeName);
+                            var toNode = dataSourceService.GetSourceNodeFor<GraphNode>(relatedNodeType, toNodeName);
                             if(toNode == null)
                             {
                                 logger.LogError("toNode is null {NodeType}.", relatedNodeType);
