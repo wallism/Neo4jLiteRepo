@@ -73,7 +73,8 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     public T? GetSourceNodeFor<T>(string key, string nodePrimaryKeyValue) where T : GraphNode
     {
         var sourceNodes = GetSourceNodesFor<T>(key);
-        return sourceNodes.FirstOrDefault(n => n.GetPrimaryKeyValue() == nodePrimaryKeyValue);
+        // null warning suppressed because GetPrimaryKeyValue throws an ex if the value is null
+        return sourceNodes.FirstOrDefault(n => n.GetPrimaryKeyValue()!.Equals(nodePrimaryKeyValue, StringComparison.InvariantCultureIgnoreCase));
     }
 
     /// <summary>

@@ -23,13 +23,21 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
 
     public virtual async Task<IEnumerable<GraphNode>> LoadData()
     {
-        var json = await File.ReadAllTextAsync(FilePath);
-        var data = JsonConvert.DeserializeObject<IList<GraphNode>>(json, new JsonSerializerSettings
+        try
         {
-            TypeNameHandling = TypeNameHandling.Auto // Ensures polymorphic deserialization
-        });
+            var json = await File.ReadAllTextAsync(FilePath);
+            var data = JsonConvert.DeserializeObject<IList<GraphNode>>(json, new JsonSerializerSettings
+            {
+                TypeNameHandling = TypeNameHandling.Auto // Ensures polymorphic deserialization
+            });
 
-        return data ?? [];
+            return data ?? [];
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+            throw;
+        }
     }
 
     public abstract Task<IList<GraphNode>> RefreshNodeData(bool saveToFile = true);

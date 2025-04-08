@@ -23,7 +23,19 @@ namespace Neo4jLiteRepo.Helpers
 
         public bool ShouldRefreshNode(string nodeName)
         {
-            return ShouldRefreshAll() || _forceRefresh.Contains(nodeName);
+            if(ShouldRefreshAll())
+                return true;
+
+            foreach (var configuredNode in _forceRefresh)
+            {
+                // may have a prefix of "!" to indicate not to refresh
+                if (! configuredNode.Contains(nodeName, StringComparison.InvariantCultureIgnoreCase))
+                    continue;
+
+                return !configuredNode.StartsWith("!");
+            }
+
+            return false;
         }
     }
 }
