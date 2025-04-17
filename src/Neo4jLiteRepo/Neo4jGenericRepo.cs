@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Neo4j.Driver;
 using Neo4jLiteRepo.Attributes;
 using Neo4jLiteRepo.Helpers;
+using Neo4jLiteRepo.Models;
 using Neo4jLiteRepo.NodeServices;
 
 namespace Neo4jLiteRepo
@@ -18,6 +19,10 @@ namespace Neo4jLiteRepo
         Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode;
         Task<bool> CreateRelationshipsAsync<T>(T nodes) where T : GraphNode;
         Task<bool> CreateRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
+
+        Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync();
+        Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync(IAsyncSession session);
+
     }
 
     public class Neo4jGenericRepo(ILogger<Neo4jGenericRepo> logger,
@@ -258,6 +263,57 @@ namespace Neo4jLiteRepo
             }
 
             return true;
+        }
+
+        public async Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync()
+        {
+            await using var session = neo4jDriver.AsyncSession();
+            return await GetNodesAndRelationshipsAsync(session);
+        }
+
+        /// <summary>
+        /// Get all node types and their relationships (in and out).
+        /// </summary>
+        /// <returns>useful if you want to feed your graph map into AI</returns>
+        public async Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync(IAsyncSession session)
+        {
+            const string query = @"
+    CALL db.labels() YIELD label AS nodeType
+    WITH nodeType
+    ORDER BY nodeType
+    
+    // Find outgoing relationships
+    OPTIONAL MATCH (n)-[r]->() 
+    WHERE nodeType IN labels(n)
+    WITH nodeType, collect(DISTINCT type(r)) AS outgoingRels
+    
+    // Find incoming relationships
+    OPTIONAL MATCH (n)<-[r]-() 
+    WHERE nodeType IN labels(n)
+    WITH nodeType, outgoingRels, collect(DISTINCT type(r)) AS incomingRels
+    
+    // Format results
+    RETURN 
+        nodeType AS NodeType,
+        [rel IN outgoingRels WHERE rel IS NOT NULL | rel ] AS OutgoingRelationships,
+        [rel IN incomingRels WHERE rel IS NOT NULL | rel] AS IncomingRelationships
+    ORDER BY nodeType";
+
+            var result = await session.RunAsync(query);
+            var records = await result.ToListAsync();
+
+            var response = new NodeRelationshipsResponse
+            {
+                QueriedAt = DateTime.UtcNow,
+                NodeTypes = records.Select(record => new NodeRelationshipInfo
+                {
+                    NodeType = record["NodeType"].As<string>(),
+                    OutgoingRelationships = record["OutgoingRelationships"].As<List<string>>(),
+                    IncomingRelationships = record["IncomingRelationships"].As<List<string>>()
+                }).ToList()
+            };
+
+            return response;
         }
 
         /// <summary>

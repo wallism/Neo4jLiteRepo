@@ -9,6 +9,7 @@ using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.Setup;
 using Neo4jLiteRepo.Sample.NodeServices;
 using Neo4jLiteRepo.NodeServices;
+using Newtonsoft.Json;
 
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
@@ -63,6 +64,10 @@ var seedService = servicesProvider.GetRequiredService<IDataSeedService>();
 try
 {
     var result = await seedService.SeedAllData();
+
+    //var result = await repo.GetNodesAndRelationshipsAsync();
+    //var json = JsonConvert.SerializeObject(result);
+    //Log.Logger.Information(json);
 }
 catch (Exception ex)
 {
