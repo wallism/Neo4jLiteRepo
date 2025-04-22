@@ -1,4 +1,5 @@
 ﻿using System.Reflection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Neo4j.Driver;
 using Neo4jLiteRepo.Attributes;
@@ -26,6 +27,7 @@ namespace Neo4jLiteRepo
     }
 
     public class Neo4jGenericRepo(ILogger<Neo4jGenericRepo> logger,
+        IConfiguration config,
         IDriver neo4jDriver,
         IDataSourceService dataSourceService) : IAsyncDisposable, INeo4jGenericRepo
     {
@@ -277,29 +279,46 @@ namespace Neo4jLiteRepo
         /// <returns>useful if you want to feed your graph map into AI</returns>
         public async Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync(IAsyncSession session)
         {
-            const string query = @"
-    CALL db.labels() YIELD label AS nodeType
-    WITH nodeType
-    ORDER BY nodeType
-    
-    // Find outgoing relationships
-    OPTIONAL MATCH (n)-[r]->() 
-    WHERE nodeType IN labels(n)
-    WITH nodeType, collect(DISTINCT type(r)) AS outgoingRels
-    
-    // Find incoming relationships
-    OPTIONAL MATCH (n)<-[r]-() 
-    WHERE nodeType IN labels(n)
-    WITH nodeType, outgoingRels, collect(DISTINCT type(r)) AS incomingRels
-    
-    // Format results
-    RETURN 
-        nodeType AS NodeType,
-        [rel IN outgoingRels WHERE rel IS NOT NULL | rel ] AS OutgoingRelationships,
-        [rel IN incomingRels WHERE rel IS NOT NULL | rel] AS IncomingRelationships
-    ORDER BY nodeType";
+            // why exclude? I pass the result into AI to help it gen cypher. If a rel exists on many NodeType's, to minimize noise (and cost) I pass this instead: 
+            // example: "GlobalOutgoingRelationships": ["IN_GROUP"]
+            var excludedOutRelationships = config.GetSection("Neo4jLiteRepo:GetNodesAndRelationships:excludedOutRelationships")
+                .Get<List<string>>() ?? [];
+            var excludedInRelationships = config.GetSection("Neo4jLiteRepo:GetNodesAndRelationships:excludedInRelationships")
+                .Get<List<string>>() ?? [];
 
-            var result = await session.RunAsync(query);
+            // Create a parameters dictionary
+            var parameters = new Dictionary<string, object>
+            {
+                { "excludedOutRels", excludedOutRelationships },
+                { "excludedInRels", excludedInRelationships }
+            };
+
+            var query = $$"""
+                          CALL db.labels() YIELD label AS nodeType
+                          WITH nodeType
+                          ORDER BY nodeType
+                          // Find outgoing relationships
+                          OPTIONAL MATCH (n)-[r]->() 
+                          WHERE nodeType IN labels(n)
+                          WITH nodeType, collect(DISTINCT type(r)) AS allOutgoingRels
+                          // Find incoming relationships
+                          OPTIONAL MATCH (n)<-[r]-() 
+                          WHERE nodeType IN labels(n)
+                          WITH nodeType, allOutgoingRels, collect(DISTINCT type(r)) AS allIncomingRels
+                          // Filter out excluded relationships
+                          WITH 
+                              nodeType,
+                              [rel IN allOutgoingRels WHERE rel IS NOT NULL AND NOT rel IN $excludedOutRels ] AS outgoingRels,
+                              [rel IN allIncomingRels WHERE rel IS NOT NULL AND NOT rel IN $excludedInRels] AS incomingRels
+                          // Format results
+                          RETURN 
+                              nodeType AS NodeType,
+                              outgoingRels AS OutgoingRelationships,
+                              incomingRels AS IncomingRelationships
+                          ORDER BY nodeType
+                          """;
+
+            var result = await session.RunAsync(query, parameters);
             var records = await result.ToListAsync();
 
             var response = new NodeRelationshipsResponse
