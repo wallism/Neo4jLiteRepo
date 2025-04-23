@@ -24,6 +24,10 @@ namespace Neo4jLiteRepo
         Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync();
         Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync(IAsyncSession session);
 
+        Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null);
+
+        Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null);
+
     }
 
     public class Neo4jGenericRepo(ILogger<Neo4jGenericRepo> logger,
@@ -35,7 +39,7 @@ namespace Neo4jLiteRepo
         {
             neo4jDriver.Dispose();
         }
-        
+
         protected string Now => DateTimeOffset.Now.ToLocalTime().ToString("O");
 
         public async Task<bool> UpsertNodes<T>(IEnumerable<T> nodes) where T : GraphNode
@@ -110,26 +114,38 @@ namespace Neo4jLiteRepo
                 var value = property.GetValue(obj);
                 if (value != null && !IsSimpleType(value.GetType()))
                 {
-                    // Recurse into child objects
+                    // If a property has [NodeProperty("")] then we need to recurse into child objects
                     foreach (var childProperty in GetNodePropertiesRecursive(value, depth - 1))
                     {
                         yield return childProperty;
                     }
+                    continue;
                 }
 
                 var attribute = property.GetCustomAttribute<NodePropertyAttribute>();
                 if (attribute == null)
                     continue;
-                if(attribute.Exclude)
+                if (attribute.Exclude)
                     continue;
                 var propertyName = attribute.PropertyName;
-                if (string.IsNullOrWhiteSpace(propertyName))
-                    continue;
 
-                // Add the current property
-                yield return $"n.{propertyName} = \"{value?.AutoRedact(propertyName)}\"";
+                if (value == null)
+                {
+                    yield return $"n.{propertyName} = null";
+                    continue;
+                }
+
+                if (value.IsBool())
+                {
+                    yield return $"n.{propertyName} = {value}";
+                    continue;
+                }
+
+                // Add the current property (as string)
+                yield return $"n.{propertyName} = \"{value.AutoRedact(propertyName)}\"";
             }
         }
+
 
         private static bool IsSimpleType(Type type)
         {
@@ -192,14 +208,14 @@ namespace Neo4jLiteRepo
                         {
                             // relatedNode string indicates which GraphNode this node relates to
                             var toNode = dataSourceService.GetSourceNodeFor<GraphNode>(relatedNodeType, toNodeName);
-                            if(toNode == null)
+                            if (toNode == null)
                             {
                                 logger.LogError("toNode is null {NodeType} {toNodeName} (in a sub that is not loaded?)", relatedNodeType, toNodeName);
                                 continue; // skip to next related node
                             }
                             logger.LogInformation("{from}-[{relationship}]->{to}", relationshipName, fromNode.DisplayName, toNode.DisplayName);
 
-                            var query = 
+                            var query =
  $$"""
  MATCH (from: {{fromNode.LabelName}} {{{fromNode.GetPrimaryKeyName()}}: "{{fromNode.GetPrimaryKeyValue()}}"})
  MATCH (to:   {{toNode.LabelName}} {{{toNode.GetPrimaryKeyName()}}: "{{toNode.GetPrimaryKeyValue()}}" })
@@ -247,14 +263,14 @@ namespace Neo4jLiteRepo
             await using var session = neo4jDriver.AsyncSession();
             foreach (var nodeService in nodeServices)
             {
-                if(! nodeService.EnforceUniqueConstraint)
+                if (!nodeService.EnforceUniqueConstraint)
                     continue;
 
                 var type = nodeService.GetType();
 
                 // Get the base type (e.g FileNodeService<Movie>)
                 var baseType = type.BaseType;
-                if (baseType == null || !baseType.IsGenericType) 
+                if (baseType == null || !baseType.IsGenericType)
                     continue;
                 var genericType = baseType.GetGenericArguments()[0]; // Should be typeof(Movie)
                 if (Activator.CreateInstance(genericType) is GraphNode instance)
@@ -265,6 +281,65 @@ namespace Neo4jLiteRepo
             }
 
             return true;
+        }
+        
+
+        public async Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
+        {
+            await using var session = neo4jDriver.AsyncSession();
+            try
+            {
+                parameters ??= new Dictionary<string, object>();
+
+                var result = await session.ExecuteReadAsync(async tx =>
+                {
+                    var res = await tx.RunAsync(query, parameters);
+                    var records = await res.ToListAsync();
+
+                    // Assuming the returned value is a list of objects (like ["a", "b", "c"])
+                    var list = records
+                        .SelectMany(x => x[returnObjectKey].As<List<object>>())
+                        .Select(o => (T)Convert.ChangeType(o, typeof(T)))
+                        .ToList();
+
+                    return list;
+                });
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Problem executing {query}", query);
+                throw;
+            }
+        }
+
+
+        /// <summary>
+        /// Execute read scalar as an asynchronous operation.
+        /// </summary>
+        /// <remarks>untested - 20250424</remarks>
+        public async Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null)
+        {
+            await using var session = neo4jDriver.AsyncSession();
+            try
+            {
+                parameters = parameters ?? new Dictionary<string, object>();
+
+                var result = await session.ExecuteReadAsync(async tx =>
+                {
+                    var res = await tx.RunAsync(query, parameters);
+                    var scalar = (await res.SingleAsync())[0].As<T>();
+                    return scalar;
+                });
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Problem executing {query}", query);
+                throw;
+            }
         }
 
         public async Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync()

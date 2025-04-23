@@ -8,7 +8,7 @@ namespace Neo4jLiteRepo.Helpers
         /// <summary>
         /// properties have Camel casing
         /// </summary>
-        public static string ToGraphPropertyCasing(this string original)
+        internal static string ToGraphPropertyCasing(this string original)
         {
             return string.IsNullOrWhiteSpace(original)
                 ? string.Empty
@@ -18,25 +18,25 @@ namespace Neo4jLiteRepo.Helpers
         /// <summary>
         /// properties have Camel casing
         /// </summary>
-        public static string ToGraphRelationShipCasing(this string original)
+        internal static string ToGraphRelationShipCasing(this string original)
         {
             return original.ToUpper();
         }
 
-        public static string GetNodeKeyName(this INodeService nodeService)
+        internal static string GetNodeKeyName(this INodeService nodeService)
         {
             return nodeService.GetType().Name.Replace("NodeService", string.Empty);
         }
 
 
-        public static string ExtractLastSegment(this string input, string delimiter = "/", string nullReplacement = "none")
+        internal static string ExtractLastSegment(this string input, string delimiter = "/", string nullReplacement = "none")
         {
             return string.IsNullOrWhiteSpace(input)
                 ? nullReplacement
                 : input.Split(delimiter).Last();
         }
 
-        public static object? AutoRedact(this object? value, string? propertyName)
+        internal static object? AutoRedact(this object? value, string? propertyName)
         {
             if (value is not string || string.IsNullOrWhiteSpace(propertyName))
                 return value;
@@ -99,6 +99,11 @@ namespace Neo4jLiteRepo.Helpers
                 .Select(w => upperCaseInside.Replace(w, m => m.Value.ToLower()));
 
             return string.Concat(pascalCase);
+        }
+
+        internal static bool IsBool(this object value)
+        {
+            return bool.TryParse(value.ToString(), out _);
         }
 
     }

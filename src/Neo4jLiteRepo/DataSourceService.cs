@@ -56,7 +56,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
             return sourceNodesFor.OfType<T>();
         }
 
-        logger.LogWarning("{key} not found in allNodes source data", key);
+        logger.LogInformation("{key} currently not in allNodes", key);
         return [];
     }
 
