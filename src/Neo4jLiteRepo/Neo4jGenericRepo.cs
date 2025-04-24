@@ -300,6 +300,7 @@ namespace Neo4jLiteRepo
                     var list = records
                         .SelectMany(x => x[returnObjectKey].As<List<object>>())
                         .Select(o => (T)Convert.ChangeType(o, typeof(T)))
+                        .Distinct()
                         .ToList();
 
                     return list;
