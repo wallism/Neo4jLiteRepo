@@ -95,13 +95,13 @@ namespace Neo4jLiteRepo
         }
 
 
-        private static string GetNodeProperties<T>(T node, int depth = 5) where T : GraphNode
+        private string GetNodeProperties<T>(T node, int depth = 5) where T : GraphNode
         {
             var declaredNodeProperties = GetNodePropertiesRecursive(node, depth);
             return string.Join(",\n  ", declaredNodeProperties);
         }
 
-        private static IEnumerable<string> GetNodePropertiesRecursive(object? obj, int depth)
+        private IEnumerable<string> GetNodePropertiesRecursive(object? obj, int depth)
         {
             if (obj == null || depth <= 0)
                 yield break;
@@ -128,9 +128,17 @@ namespace Neo4jLiteRepo
                 if (attribute.Exclude)
                     continue;
                 var propertyName = attribute.PropertyName;
-
+                
                 if (value == null)
                 {
+                    if (attribute is BoolNodePropertyAttribute boolAttribute)
+                    {
+                        yield return $"n.{propertyName} = {boolAttribute.NullDefault.ToString()}";
+                        continue;
+                    }
+
+                    // note: if the property has a null value, it won't be returned when a query is run against Neo4j
+                    logger.LogInformation("{propertyName} value is null (won't be surfaced by neo4j)", propertyName);
                     yield return $"n.{propertyName} = null";
                     continue;
                 }

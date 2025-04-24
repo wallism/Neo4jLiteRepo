@@ -19,4 +19,12 @@ namespace Neo4jLiteRepo.Attributes
         /// but only if really needed, using it is good practice for graph property names.</remarks>
         public string PropertyName { get; } = propertyName.ToGraphPropertyCasing();
     }
-}
+
+    [AttributeUsage(AttributeTargets.Property)]
+    public class BoolNodePropertyAttribute(string propertyName, bool defaultValue, bool exclude = false) 
+        : NodePropertyAttribute(propertyName, exclude)
+    {
+        public bool NullDefault { get; } = defaultValue;
+
+    }
+}  
