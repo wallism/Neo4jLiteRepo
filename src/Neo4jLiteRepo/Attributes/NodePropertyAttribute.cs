@@ -3,7 +3,7 @@ using Neo4jLiteRepo.Helpers;
 namespace Neo4jLiteRepo.Attributes
 {
     [AttributeUsage(AttributeTargets.Property)]
-    public class NodePropertyAttribute(string propertyName, bool exclude = false) : Attribute
+    public class NodePropertyAttribute(string propertyName, string? defaultValue = null, bool exclude = false) : Attribute
     {
         /// <summary>
         /// Exclude the property from being added to the graph for this Label
@@ -11,6 +11,8 @@ namespace Neo4jLiteRepo.Attributes
         /// <remarks>useful if a base class writes a property by default that
         /// is not needed or appropriate on an inheriting class.</remarks>
         public bool Exclude { get; } = exclude;
+
+        public string? StringNullDefault { get; } = defaultValue;
 
         /// <summary>
         /// Name of the Node's property, returned with Graph Property Casing
@@ -22,9 +24,9 @@ namespace Neo4jLiteRepo.Attributes
 
     [AttributeUsage(AttributeTargets.Property)]
     public class BoolNodePropertyAttribute(string propertyName, bool defaultValue, bool exclude = false) 
-        : NodePropertyAttribute(propertyName, exclude)
+        : NodePropertyAttribute(propertyName, "", exclude)
     {
-        public bool NullDefault { get; } = defaultValue;
+        public bool BoolNullDefault { get; } = defaultValue;
 
     }
 }  

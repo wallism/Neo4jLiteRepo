@@ -127,15 +127,23 @@ namespace Neo4jLiteRepo
                     continue;
                 if (attribute.Exclude)
                     continue;
+
                 var propertyName = attribute.PropertyName;
                 
                 if (value == null)
                 {
-                    if (attribute is BoolNodePropertyAttribute boolAttribute)
+                    if (!string.IsNullOrWhiteSpace(attribute.StringNullDefault))
                     {
-                        yield return $"n.{propertyName} = {boolAttribute.NullDefault.ToString()}";
+                        yield return $"n.{propertyName} = {attribute.StringNullDefault }";
                         continue;
                     }
+
+                    if (attribute is BoolNodePropertyAttribute boolAttribute)
+                    {
+                        yield return $"n.{propertyName} = {boolAttribute.BoolNullDefault.ToString()}";
+                        continue;
+                    }
+
 
                     // note: if the property has a null value, it won't be returned when a query is run against Neo4j
                     logger.LogInformation("{propertyName} value is null (won't be surfaced by neo4j)", propertyName);
