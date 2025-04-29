@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Neo4jLiteRepo.NodeServices;
-using Neo4jLiteRepo.Sample.Labels;
+using Neo4jLiteRepo.Sample.Nodes;
 
 namespace Neo4jLiteRepo.Sample.NodeServices;
 

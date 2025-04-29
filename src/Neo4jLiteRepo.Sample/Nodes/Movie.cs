@@ -1,7 +1,6 @@
 using Neo4jLiteRepo.Attributes;
-using Neo4jLiteRepo.Helpers;
 
-namespace Neo4jLiteRepo.Sample.Labels
+namespace Neo4jLiteRepo.Sample.Nodes
 {
     public class Movie : SampleGraphNode
     {

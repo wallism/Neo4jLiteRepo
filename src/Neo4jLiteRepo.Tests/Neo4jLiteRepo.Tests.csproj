@@ -29,10 +29,10 @@
 
   <Target Name="CopyDataFiles" AfterTargets="PostBuildEvent">
     <ItemGroup>
-      <DataFiles Include="..\Neo4jLiteRepo.Sample\Labels\data\Genre.json" />
-      <DataFiles Include="..\Neo4jLiteRepo.Sample\Labels\data\Movie.json" />
+      <DataFiles Include="..\Neo4jLiteRepo.Sample\Nodes\data\Genre.json" />
+      <DataFiles Include="..\Neo4jLiteRepo.Sample\Nodes\data\Movie.json" />
     </ItemGroup>
-    <Copy SourceFiles="@(DataFiles)" DestinationFolder="$(OutDir)\data\" />
+    <Copy SourceFiles="@(DataFiles)" DestinationFolder="$(OutDir)\Data\" />
   </Target>
 
 </Project>

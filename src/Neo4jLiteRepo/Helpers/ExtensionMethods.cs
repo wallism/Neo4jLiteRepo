@@ -36,7 +36,7 @@ namespace Neo4jLiteRepo.Helpers
                 : input.Split(delimiter).Last();
         }
 
-        internal static object? AutoRedact(this object? value, string? propertyName)
+        public static object? AutoRedact(this object? value, string? propertyName)
         {
             if (value is not string || string.IsNullOrWhiteSpace(propertyName))
                 return value;

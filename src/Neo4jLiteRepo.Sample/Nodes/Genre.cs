@@ -1,6 +1,6 @@
 using Neo4jLiteRepo.Attributes;
 
-namespace Neo4jLiteRepo.Sample.Labels
+namespace Neo4jLiteRepo.Sample.Nodes
 {
     public class Genre : SampleGraphNode
     {
