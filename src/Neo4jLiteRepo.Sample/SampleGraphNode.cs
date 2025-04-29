@@ -10,7 +10,7 @@ namespace Neo4jLiteRepo.Sample
     public abstract class SampleGraphNode : GraphNode
     {
 
-        [NodeProperty(nameof(SampleProperty))]
+        [NodeProperty(nameof(SampleProperty), "DefaultValueSample")]
         public virtual string? SampleProperty { get; set; }
     }
 

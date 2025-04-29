@@ -112,7 +112,7 @@ namespace Neo4jLiteRepo
             foreach (var property in properties)
             {
                 var value = property.GetValue(obj);
-                if (value != null && !IsSimpleType(value.GetType()))
+                if (value != null && !IsSimpleType(value.GetType()) && !IsEnumerable(value.GetType()))
                 {
                     // If a property has [NodeProperty("")] then we need to recurse into child objects
                     foreach (var childProperty in GetNodePropertiesRecursive(value, depth - 1))
@@ -134,7 +134,7 @@ namespace Neo4jLiteRepo
                 {
                     if (!string.IsNullOrWhiteSpace(attribute.StringNullDefault))
                     {
-                        yield return $"n.{propertyName} = {attribute.StringNullDefault }";
+                        yield return $"n.{propertyName} = \"{attribute.StringNullDefault}\"";
                         continue;
                     }
 
@@ -157,6 +157,19 @@ namespace Neo4jLiteRepo
                     continue;
                 }
 
+                if (value is IEnumerable<string> enumerable)
+                {
+                    var stringList = enumerable.Select(x => $"\"{x}\"");
+                    yield return $"n.{propertyName} = [{string.Join(", ", stringList)}]";
+                    continue;
+                }
+
+                //if (IsEnumerable(value.GetType())) todo: handle custom types
+                //{
+                //    yield return $"n.{propertyName} = [{string.Join(value)}]";
+                //    continue;
+                //}
+
                 // Add the current property (as string)
                 yield return $"n.{propertyName} = \"{value.AutoRedact(propertyName)}\"";
             }
@@ -166,6 +179,12 @@ namespace Neo4jLiteRepo
         private static bool IsSimpleType(Type type)
         {
             return type.IsPrimitive || type.IsEnum || type == typeof(string) || type == typeof(decimal);
+        }
+
+        static bool IsEnumerable(Type type)
+        {
+            return typeof(System.Collections.IEnumerable).IsAssignableFrom(type)
+                   && type != typeof(string);
         }
 
         public async Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode

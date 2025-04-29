@@ -23,6 +23,10 @@ namespace Neo4jLiteRepo.Sample.Labels
         public IEnumerable<string> Genres { get; set; }
 
 
+        [NodeProperty("TestArray")]
+        public List<string> TestArray { get; set; }
+
+
         public override string BuildDisplayName() => Title;
     }
 } 

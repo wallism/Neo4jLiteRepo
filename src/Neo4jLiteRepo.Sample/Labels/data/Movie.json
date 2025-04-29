@@ -17,7 +17,8 @@
     "Test": "test2",
     "Released": 2003,
     "Tagline": "There are 3.7 trillion fish in the ocean. They're looking for one.",
-    "Genres": [ "Animation", "Adventure" ]
+    "Genres": [ "Animation", "Adventure" ],
+    "TestArray": [ "justone" ]
   },
   {
     "$type": "Neo4jLiteRepo.Sample.Labels.Movie, Neo4jLiteRepo.Sample",
@@ -25,6 +26,7 @@
     "Title": "The Incredibles",
     "Released": 2004,
     "Tagline": "No gut, no glory",
-    "Genres": [ "Animation", "Action" ]
+    "Genres": [ "Animation", "Action" ],
+    "TestArray": ["one", "two", "three"]
   }
 ]
