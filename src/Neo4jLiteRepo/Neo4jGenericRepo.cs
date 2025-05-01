@@ -172,6 +172,14 @@ namespace Neo4jLiteRepo
                     continue;
                 }
 
+                if (value is float[] floatArray)
+                {
+                    // Format the float array without quotes, just comma-separated values
+                    var vectorString = string.Join(", ", floatArray);
+                    yield return $"n.{propertyName} = [{vectorString}]";
+                    continue;
+                }
+
                 //if (IsEnumerable(value.GetType())) todo: handle custom types
                 //{
                 //    yield return $"n.{propertyName} = [{string.Join(value)}]";
