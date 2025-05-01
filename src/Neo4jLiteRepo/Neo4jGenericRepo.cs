@@ -164,6 +164,14 @@ namespace Neo4jLiteRepo
                     continue;
                 }
 
+                if (value is DateTime dateTime)
+                {
+                    // Format to ISO 8601 format that Neo4j expects
+                    var formattedDate = dateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+                    yield return $"n.{propertyName} = datetime('{formattedDate}')";
+                    continue;
+                }
+
                 //if (IsEnumerable(value.GetType())) todo: handle custom types
                 //{
                 //    yield return $"n.{propertyName} = [{string.Join(value)}]";
