@@ -1,5 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.NodeServices;
@@ -14,7 +13,6 @@ namespace Neo4jLiteRepo
 
     public class DataSeedService(
         ILogger<DataSeedService> logger,
-        IConfiguration config,
         INeo4jGenericRepo graphRepo,
         IDataSourceService dataSourceService,
         IDataRefreshPolicy dataRefreshPolicy,

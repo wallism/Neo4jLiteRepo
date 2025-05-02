@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.NodeServices;
 using Neo4jLiteRepo.Sample.Nodes;
 using Neo4jLiteRepo.Sample.NodeServices;
@@ -32,8 +33,8 @@ namespace Neo4jLiteRepo.Tests
             _configuration = Substitute.For<IConfiguration>();
 
             // Setup the configuration section mock
-            _configuration["FileNodeService:JsonFilePath"]
-                .Returns("data");
+            _configuration["Neo4jLiteRepo:JsonFilePath"]
+                .Returns(".\\Nodes\\Data\\");
         }
 
         [OneTimeTearDown]
@@ -47,6 +48,10 @@ namespace Neo4jLiteRepo.Tests
             services.AddSingleton<INodeService, GenreNodeService>();
             services.AddSingleton<INodeService, MovieNodeService>();
             services.AddSingleton<IConfiguration>(_ => _configuration);
+            services.AddSingleton<IDataRefreshPolicy, DataRefreshPolicy>();
+
+            var drpLogger = Substitute.For<ILogger<DataRefreshPolicy>>();
+            services.AddSingleton(drpLogger);
 
             _serviceProvider = services.BuildServiceProvider();
             _dataSourceService = new DataSourceService(_logger, _serviceProvider);

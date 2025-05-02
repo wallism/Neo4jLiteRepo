@@ -1,6 +1,6 @@
 [
   {
-    "$type": "Neo4jLiteRepo.Sample.Labels.Movie, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Nodes.Movie, Neo4jLiteRepo.Sample",
     "Id": "1",
     "Title": "Toy Story",
     "Test": "test1",
@@ -11,7 +11,7 @@
     "Genres": [ "Animation", "Comedy" ]
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Labels.Movie, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Nodes.Movie, Neo4jLiteRepo.Sample",
     "Id": "2",
     "Title": "Finding Nemo",
     "Test": "test2",
@@ -21,7 +21,7 @@
     "TestArray": [ "justone" ]
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Labels.Movie, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Nodes.Movie, Neo4jLiteRepo.Sample",
     "Id": "3",
     "Title": "The Incredibles",
     "Released": 2004,

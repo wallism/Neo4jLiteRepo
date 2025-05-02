@@ -43,7 +43,7 @@ builder.Services.AddSingleton<IDriver>(_ =>
     return driver;
 });
 
-builder.Services.AddSingleton<IForceRefreshHandler, ForceRefreshHandler>();
+builder.Services.AddSingleton<IDataRefreshPolicy, DataRefreshPolicy>();
 
 // register node services
 builder.Services.AddSingleton<INodeService, MovieNodeService>();

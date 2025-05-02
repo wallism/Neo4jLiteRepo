@@ -1,6 +1,6 @@
 [
   {
-    "$type": "Neo4jLiteRepo.Sample.Labels.Genre, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "1",
     "Name": "Animation",
     "Description": "Animated movies",
@@ -8,21 +8,21 @@
     "Movies": [ "Finding Nemo", "The Incredibles", "Toy Story" ]
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Labels.Genre, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "2",
     "Name": "Action",
     "Description": "Action movies",
     "Movies": [ "The Incredibles" ]
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Labels.Genre, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "3",
     "Name": "Comedy",
     "Description": "Comedy movies",
     "Movies": [ "Toy Story" ]
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Labels.Genre, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "4",
     "Name": "Adventure",
     "Description": "Adventure movies",

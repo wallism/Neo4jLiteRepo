@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.Configuration;
-using Neo4jLiteRepo.Attributes;
 using Neo4jLiteRepo.Helpers;
 using Newtonsoft.Json;
 
@@ -56,8 +55,9 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
     }
 
     /// <summary>
-    /// This method is called to refresh the data from the source.
+    /// This method is called (in LoadData) to refresh the data from the source.
     /// </summary>
+    /// <remarks>make private?</remarks>
     public virtual async Task<IList<GraphNode>> RefreshNodeData(bool saveToFile = true)
     {
         var data = await LoadDataFromSource().ConfigureAwait(false);

@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Neo4jLiteRepo.Helpers;
+using NSubstitute;
 using NUnit.Framework;
 
 namespace Neo4jLiteRepo.Tests
@@ -14,9 +16,9 @@ namespace Neo4jLiteRepo.Tests
         {
             var inMemorySettings = new Dictionary<string, string>
             {
-                { "Neo4jLiteRepo:ForceRefresh:0", "Node1" },
-                { "Neo4jLiteRepo:ForceRefresh:1", "Node2" },
-                { "Neo4jLiteRepo:ForceRefresh:2", "!NodeExcluded" }
+                { "Neo4jLiteRepo:DataRefreshPolicy:ForceRefresh:0", "Node1" },
+                { "Neo4jLiteRepo:DataRefreshPolicy:ForceRefresh:1", "Node2" },
+                { "Neo4jLiteRepo:DataRefreshPolicy:ForceRefresh:2", "!NodeExcluded" }
             };
 
             _configuration = new ConfigurationBuilder()
@@ -28,21 +30,21 @@ namespace Neo4jLiteRepo.Tests
         public void Constructor_ShouldInitializeForceRefreshList()
         {
             // Arrange & Act
-            var handler = new ForceRefreshHandler(_configuration);
+            var dataRefreshPolicy = new DataRefreshPolicy(_configuration, Substitute.For<ILogger<DataRefreshPolicy>>());
 
             // Assert
-            Assert.That(handler.ShouldRefreshNode("Node1"), Is.True);
-            Assert.That(handler.ShouldRefreshNode("Node2"), Is.True);
+            Assert.That(dataRefreshPolicy.ShouldRefreshNode("Node1"), Is.True);
+            Assert.That(dataRefreshPolicy.ShouldRefreshNode("Node2"), Is.True);
         }
 
         [Test]
         public void ShouldRefreshNode_ShouldReturnTrue_WhenNodeIsInForceRefreshList()
         {
             // Arrange
-            var handler = new ForceRefreshHandler(_configuration);
+            var dataRefreshPolicy = new DataRefreshPolicy(_configuration, Substitute.For<ILogger<DataRefreshPolicy>>());
 
             // Act
-            var result = handler.ShouldRefreshNode("Node1");
+            var result = dataRefreshPolicy.ShouldRefreshNode("Node1");
 
             // Assert
             Assert.That(result, Is.True);
@@ -52,10 +54,10 @@ namespace Neo4jLiteRepo.Tests
         public void ShouldRefreshNode_ShouldReturnFalse_WhenNodeIsNotInForceRefreshList()
         {
             // Arrange
-            var handler = new ForceRefreshHandler(_configuration);
+            var dataRefreshPolicy = new DataRefreshPolicy(_configuration, Substitute.For<ILogger<DataRefreshPolicy>>());
 
             // Act
-            var result = handler.ShouldRefreshNode("Node3");
+            var result = dataRefreshPolicy.ShouldRefreshNode("Node3");
 
             // Assert
             Assert.That(result, Is.False);
@@ -65,10 +67,10 @@ namespace Neo4jLiteRepo.Tests
         public void ShouldRefreshNode_ShouldReturnFalse_WhenNodeExcludedWithExclamationMark()
         {
             // Arrange
-            var handler = new ForceRefreshHandler(_configuration);
+            var dataRefreshPolicy = new DataRefreshPolicy(_configuration, Substitute.For<ILogger<DataRefreshPolicy>>());
 
             // Act
-            var result = handler.ShouldRefreshNode("NodeExcluded");
+            var result = dataRefreshPolicy.ShouldRefreshNode("NodeExcluded");
 
             // Assert
             Assert.That(result, Is.False);
@@ -80,17 +82,17 @@ namespace Neo4jLiteRepo.Tests
             // Arrange
             var inMemorySettings = new Dictionary<string, string>
             {
-                { "Neo4jLiteRepo:ForceRefresh:0", "All" }
+                { "Neo4jLiteRepo:DataRefreshPolicy:ForceRefresh:0", "All" }
             };
 
             _configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(inMemorySettings)
                 .Build();
 
-            var handler = new ForceRefreshHandler(_configuration);
+            var dataRefreshPolicy = new DataRefreshPolicy(_configuration, Substitute.For<ILogger<DataRefreshPolicy>>());
 
             // Act
-            var result = handler.ShouldRefreshNode("AnyNode");
+            var result = dataRefreshPolicy.ShouldRefreshNode("AnyNode");
 
             // Assert
             Assert.That(result, Is.True);
@@ -100,11 +102,15 @@ namespace Neo4jLiteRepo.Tests
         public void ShouldRefreshNode_ShouldReturnFalse_WhenForceRefreshListIsEmpty()
         {
             // Arrange
-            var emptyConfig = new ConfigurationBuilder().Build();
-            var handler = new ForceRefreshHandler(emptyConfig);
+            var inMemorySettings = new Dictionary<string, string> { };
+
+            _configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(inMemorySettings)
+                .Build();
+            var dataRefreshPolicy = new DataRefreshPolicy(_configuration, Substitute.For<ILogger<DataRefreshPolicy>>());
 
             // Act
-            var result = handler.ShouldRefreshNode("Node1");
+            var result = dataRefreshPolicy.ShouldRefreshNode("Node1");
 
             // Assert
             Assert.That(result, Is.False);
