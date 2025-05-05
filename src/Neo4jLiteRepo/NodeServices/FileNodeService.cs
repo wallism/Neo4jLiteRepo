@@ -31,6 +31,11 @@ public abstract class FileNodeService<T>(IConfiguration config,
     {
         try
         {
+            // if there is a parent, data will be loaded from the parent.
+            // We still need to load the data via RefreshNodeData (which should return from DataSourceService.allNodes)
+            if (!string.IsNullOrWhiteSpace(ParentDataSource))
+                return await RefreshNodeData();
+
             // refresh file data if needed
             var fullFilePath = GetFullFilePath(fileName);
             if (!dataRefreshPolicy.AlwaysLoadFromFile
@@ -43,7 +48,10 @@ public abstract class FileNodeService<T>(IConfiguration config,
                     return result;
             }
 
-            // load data from file
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"read data from file {fileName}");
+            Console.ResetColor();
+
             var json = await File.ReadAllTextAsync(fullFilePath);
             var data = JsonConvert.DeserializeObject<IList<GraphNode>>(json, new JsonSerializerSettings
             {
@@ -79,6 +87,11 @@ public abstract class FileNodeService<T>(IConfiguration config,
     public abstract Task<bool> RefreshNodeRelationships(IEnumerable<GraphNode> data);
 
     public virtual bool EnforceUniqueConstraint { get; set; } = true;
+    /// <summary>
+    /// If the data for this node is loaded when another (parent) node is loaded.
+    /// Set to the name of the parent node type. 20250505 mw parent name is not currently used.
+    /// </summary>
+    public virtual string ParentDataSource { get; set; } = string.Empty;
 
     public virtual int LoadPriority => 99;
 
@@ -88,14 +101,26 @@ public abstract class FileNodeService<T>(IConfiguration config,
     public virtual bool UseRefreshDataOnLoadData => false;
 
 
-    protected async Task SaveToFileAsync(IEnumerable<GraphNode> data, string? fileName = null)
+    protected virtual async Task SaveToFileAsync(IEnumerable<GraphNode> data, string? fileName = null)
     {
-        var json = JsonConvert.SerializeObject(data, Formatting.Indented, new JsonSerializerSettings
+        try
         {
-            TypeNameHandling = TypeNameHandling.Auto, // Enables polymorphic serialization
-            ContractResolver = new ExcludeTypeGenerationContractResolver()
-        });
-        await File.WriteAllTextAsync(GetFullFilePath(fileName), json);
+            var json = JsonConvert.SerializeObject(data, Formatting.Indented, new JsonSerializerSettings
+            {
+                TypeNameHandling = TypeNameHandling.Auto, // Enables polymorphic serialization
+                ContractResolver = new ExcludeTypeGenerationContractResolver()
+            });
+            var filePath = GetFullFilePath(fileName);
+
+            await File.WriteAllTextAsync(filePath, json);
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine(ex);
+            Console.ResetColor();
+            throw;
+        }
     }
 
 
