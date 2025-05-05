@@ -23,6 +23,7 @@ public interface IDataSourceService
     T? GetSourceNodeFor<T>(string key, string nodePrimaryKeyValue) where T : GraphNode;
 
     void AddSourceNodes<T>(List<T> nodes) where T : GraphNode;
+    void AddSourceNodes<T>(string key, List<T> nodes) where T : GraphNode;
 }
 
 /// <summary>
@@ -38,7 +39,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     public Dictionary<string, IEnumerable<GraphNode>> GetAllSourceNodes()
         => allNodes;
 
-    
+
     public IEnumerable<T> GetSourceNodesFor<T>() where T : GraphNode
     {
         var key = typeof(T).Name;
@@ -46,8 +47,8 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     }
 
     /// <summary>
-    /// Get Source Nodes of a specific type. "key" is the type of T, e.g. "WebApp". This overload would be redundant but it is here
-    /// to allow a call using reflection (e.g. in Neo4jGenericRepo
+    /// Get Source Nodes of a specific type. "key" is the type of T, e.g. "WebApp". This overload would be redundant,
+    /// it is here to allow a call using reflection (e.g. in Neo4jGenericRepo)
     /// </summary>
     public IEnumerable<T> GetSourceNodesFor<T>(string key) where T : GraphNode
     {
@@ -84,10 +85,32 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     public void AddSourceNodes<T>(List<T> nodes) where T : GraphNode
     {
         var key = typeof(T).Name;
+        AddSourceNodes(key, nodes);
+    }
+
+    /// <summary>
+    /// Add nodes to any existing nodes for the given key.
+    /// </summary>
+    /// <remarks>won't add duplicates (matches on Id)</remarks>
+    public void AddSourceNodes<T>(string key, List<T> nodes) where T : GraphNode
+    {
+        if (!nodes.Any())
+            return;
+
         allNodes.TryGetValue(key, out var allExisting);
-        allNodes[key] = allExisting != null
-            ? allExisting.Concat(nodes).ToList()
-            : nodes;
+        if (allExisting == null)
+        {
+            allNodes[key] = nodes;
+        }
+        else
+        {
+            var existing = allExisting.ToList();
+            nodes.ForEach(n => {
+                if (!existing.Any(e => e.Id.Equals(n.Id)))
+                    existing.Add(n);
+            });
+            allNodes[key] = existing;
+        }
     }
 
     /// <summary>
@@ -107,7 +130,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
 
                 // key could exist, ignore if it does (data added to allNodes elsewhere, probably during a data refresh).
                 var addResult = allNodes.TryAdd(loader.GetNodeKeyName(), nodes);
-                if(!addResult)
+                if (!addResult)
                     logger.LogWarning("Failed to add {nodeType} to allNodes (may already exist?)", loader.GetNodeKeyName());
             }
             catch (Exception ex)

@@ -14,9 +14,15 @@ public abstract class FileNodeService<T>(IConfiguration config,
 {
     public IConfiguration Config { get; } = config;
 
-    protected string GetFullFilePath(string? fileName = null)
+    protected string GetFullFilePath(string? fileName = null, string extension = ".json")
     {
-        return $"{Path.Combine(SourceFilesRootPath, fileName ?? typeof(T).Name)}.json";
+        var path = $"{Path.Combine(SourceFilesRootPath, fileName ?? typeof(T).Name)}";
+        // If the path doesn't have an extension, add .json
+        if (string.IsNullOrEmpty(Path.GetExtension(path)))
+        {
+            path = Path.ChangeExtension(path, extension);
+        }
+        return path;
     }
 
     protected string SourceFilesRootPath { get; set; } = config["Neo4jLiteRepo:JsonFilePath"] ?? Environment.CurrentDirectory;

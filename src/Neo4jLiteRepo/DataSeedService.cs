@@ -107,25 +107,5 @@ namespace Neo4jLiteRepo
         }
 
 
-
-
-        private List<Type> GetGraphNodeTypes()
-        {
-            return [];
-            //var allTypes = AppDomain.CurrentDomain.GetAssemblies()
-            //    .Where(assembly => !assembly.FullName.StartsWith("System")
-            //                       && !assembly.FullName.StartsWith("Microsoft")
-            //                       && !assembly.FullName.StartsWith("Neo4j.Driver")
-            //                       && !assembly.FullName.StartsWith("Serilog"))
-            //    .SelectMany(assembly => assembly.GetTypes())
-            //    .ToList();
-
-            //var allGraphNodeTypes = allTypes
-            //    .Where(t => typeof(GraphNode).IsAssignableFrom(t)
-            //                && t is { IsAbstract: false, IsInterface: false })
-            //    .ToList();
-
-            //return allGraphNodeTypes;
-        }
     }
 }
