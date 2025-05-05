@@ -9,18 +9,11 @@ namespace Neo4jLiteRepo.NodeServices;
 /// but are working on getting your graph data structure setup.
 /// </summary>
 /// <typeparam name="T"></typeparam>
-public abstract class ApiToFileNodeService<T> : FileNodeService<T> where T : GraphNode
+public abstract class ApiToFileNodeService<T>(
+    IConfiguration config,
+    IDataRefreshPolicy dataRefreshPolicy) : FileNodeService<T>(config, dataRefreshPolicy)
+    where T : GraphNode
 {
-
-    protected ApiToFileNodeService(IConfiguration config,
-        IDataRefreshPolicy dataRefreshPolicy) : base(config, dataRefreshPolicy)
-    {
-        var sourceFilesRootPath = config["Neo4jLiteRepo:JsonFilePath"] ?? Environment.CurrentDirectory;
-        FilePath = $"{Path.Combine(sourceFilesRootPath, typeof(T).Name)}.json";
-
-    }
-
-
     public override bool UseRefreshDataOnLoadData => true;
 
     public abstract override Task<IEnumerable<GraphNode>> LoadDataFromSource();

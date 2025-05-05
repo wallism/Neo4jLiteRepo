@@ -8,30 +8,29 @@ namespace Neo4jLiteRepo.NodeServices;
 /// Simplest implementation of a FileNodeService that reads data from JSON files.
 /// </summary>
 /// <typeparam name="T"></typeparam>
-public abstract class FileNodeService<T> : INodeService where T : GraphNode
+public abstract class FileNodeService<T>(IConfiguration config,
+    IDataRefreshPolicy dataRefreshPolicy) : INodeService
+    where T : GraphNode
 {
-    public IConfiguration Config { get; }
-    private readonly IDataRefreshPolicy dataRefreshPolicy;
+    public IConfiguration Config { get; } = config;
 
-    protected FileNodeService(IConfiguration config, IDataRefreshPolicy dataRefreshPolicy)
+    protected string GetFullFilePath(string? fileName = null)
     {
-        this.dataRefreshPolicy = dataRefreshPolicy;
-        Config = config;
-        var sourceFilesRootPath = config["Neo4jLiteRepo:JsonFilePath"] ?? Environment.CurrentDirectory;
-        FilePath = $"{Path.Combine(sourceFilesRootPath, typeof(T).Name)}.json";
+        return $"{Path.Combine(SourceFilesRootPath, fileName ?? typeof(T).Name)}.json";
     }
 
-    protected string FilePath { get; set; }
+    protected string SourceFilesRootPath { get; set; } = config["Neo4jLiteRepo:JsonFilePath"] ?? Environment.CurrentDirectory;
 
-    public virtual async Task<IEnumerable<GraphNode>> LoadData()
+    public virtual async Task<IEnumerable<GraphNode>> LoadData(string? fileName = null)
     {
         try
         {
             // refresh file data if needed
+            var fullFilePath = GetFullFilePath(fileName);
             if (!dataRefreshPolicy.AlwaysLoadFromFile
-                && (!File.Exists(FilePath)
-                || new FileInfo(FilePath).Length < 128
-                || dataRefreshPolicy.ShouldRefreshNode(typeof(T).Name)))
+                && (!File.Exists(fullFilePath)
+                    || new FileInfo(fullFilePath).Length < 128
+                    || dataRefreshPolicy.ShouldRefreshNode(typeof(T).Name)))
             {
                 var result = await RefreshNodeData();
                 if (UseRefreshDataOnLoadData) // don't reload from the file
@@ -39,7 +38,7 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
             }
 
             // load data from file
-            var json = await File.ReadAllTextAsync(FilePath);
+            var json = await File.ReadAllTextAsync(fullFilePath);
             var data = JsonConvert.DeserializeObject<IList<GraphNode>>(json, new JsonSerializerSettings
             {
                 TypeNameHandling = TypeNameHandling.Auto // Ensures polymorphic deserialization
@@ -65,7 +64,7 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
         await RefreshNodeRelationships(list).ConfigureAwait(false);
 
         if (saveToFile)// save this data to a file
-            await SaveDataToFileAsync(list).ConfigureAwait(false);
+            await SaveToFileAsync(list).ConfigureAwait(false);
         return list;
     }
 
@@ -83,14 +82,14 @@ public abstract class FileNodeService<T> : INodeService where T : GraphNode
     public virtual bool UseRefreshDataOnLoadData => false;
 
 
-    protected async Task SaveDataToFileAsync(IEnumerable<GraphNode> data)
+    protected async Task SaveToFileAsync(IEnumerable<GraphNode> data, string? fileName = null)
     {
         var json = JsonConvert.SerializeObject(data, Formatting.Indented, new JsonSerializerSettings
         {
             TypeNameHandling = TypeNameHandling.Auto, // Enables polymorphic serialization
             ContractResolver = new ExcludeTypeGenerationContractResolver()
         });
-        await File.WriteAllTextAsync(FilePath, json);
+        await File.WriteAllTextAsync(GetFullFilePath(fileName), json);
     }
 
 

@@ -7,7 +7,7 @@
         /// Load data from local files.
         /// </summary>
         /// <returns></returns>
-        Task<IEnumerable<GraphNode>> LoadData();
+        Task<IEnumerable<GraphNode>> LoadData(string? fileName = null);
 
         /// <summary>
         /// Refresh node data from 'your source'. 
