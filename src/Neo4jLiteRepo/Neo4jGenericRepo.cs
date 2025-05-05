@@ -129,7 +129,7 @@ namespace Neo4jLiteRepo
                     continue;
 
                 var propertyName = attribute.PropertyName;
-                
+
                 if (value == null)
                 {
                     if (!string.IsNullOrWhiteSpace(attribute.StringNullDefault))
@@ -261,10 +261,10 @@ namespace Neo4jLiteRepo
                             var toNode = dataSourceService.GetSourceNodeFor<GraphNode>(relatedNodeType, toNodeName);
                             if (toNode == null)
                             {
-                                logger.LogError("toNode is null {NodeType} {toNodeName} (in a sub that is not loaded?)", relatedNodeType, toNodeName);
+                                logger.LogError("toNode is null {NodeType} {toNodeName} (in a source that is not loaded?)", relatedNodeType, toNodeName);
                                 continue; // skip to next related node
                             }
-                            logger.LogInformation("{from}-[{relationship}]->{to}", relationshipName, fromNode.DisplayName, toNode.DisplayName);
+                            logger.LogInformation("{from}-[{relationship}]->{to}", fromNode.DisplayName, relationshipName, toNode.DisplayName);
 
                             var query =
  $$"""
@@ -333,7 +333,7 @@ namespace Neo4jLiteRepo
 
             return true;
         }
-        
+
 
         public async Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
         {
