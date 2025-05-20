@@ -104,6 +104,31 @@ OPTIONAL MATCH (n)-[r]-(m)
 RETURN n, r, m
 ```
 
+## NodeTrainer Usage
+
+`NodeTrainer` is a utility for generating node classes and node service classes from sample JSON data. This helps automate the creation of models and services that follow Neo4jLiteRepo conventions.
+
+### How It Works
+- Reads JSON files from a configured directory (see `Neo4jLiteRepo:TrainingInputDirectory` in your `appsettings.json`).
+- Analyzes the structure of each JSON file to generate C# node classes (inheriting from `GraphNode`) and corresponding node service classes.
+- Generated files are saved under `Node.Training/Generated/Nodes` and `Node.Training/Generated/NodeServices`.
+
+### Configuration
+- Configure the input directory and property handling in `Node.Training/appsettings.json`:
+  - `Neo4jLiteRepo:TrainingInputDirectory`: Directory containing your sample JSON files.
+  - `AlwaysSeparateNodeProps`, `AlwaysIncludeProperty`, `AlwaysExcludeProperty`, etc., control how properties are modeled.
+
+### Running NodeTrainer
+1. Place your sample JSON files in the configured training directory.
+2. Run the NodeTrainer app (from the `Node.Training` project):
+   ```powershell
+   dotnet run --project src/Node.Training/Node.Training.csproj
+   ```
+3. Generated C# files will appear in the `Node.Training/Generated` folder.
+4. Review and move generated files into your main node model and service projects as needed.
+
+> **Tip:** Adjust configuration to control which properties are modeled as relationships, which are included/excluded, and naming conventions.
+
 ## Best Practices
 - Use descriptive, unique primary keys for each node type.
 - Use UPPERCASE_WITH_UNDERSCORES for relationship names.
