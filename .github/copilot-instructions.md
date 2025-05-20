@@ -152,3 +152,6 @@ Only model as a separate node if you foresee querying or relating the child obje
 Relationship Naming:
 
 Use descriptive, UPPERCASE_WITH_UNDERSCORES relationship names (e.g., HAS_SKU, HAS_NETWORK_ACLS).
+
+## git
+- main branch is 'master'
