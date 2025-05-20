@@ -76,7 +76,7 @@ namespace Neo4jLiteRepo.Helpers
         /// <summary>
         /// PascalCaseLikeThis
         /// </summary>
-        internal static string ToPascalCase(this string original)
+        public static string ToPascalCase(this string original)
         {
             var invalidCharsRgx = new Regex("[^_a-zA-Z0-9]");
             var whiteSpace = new Regex(@"(?<=\s)");

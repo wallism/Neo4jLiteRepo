@@ -47,15 +47,15 @@ This is the central class for database interactions. It handles:
 
 ### Creating Node Classes
 
-1. Always inherit from `GraphNode` or a custom subclass
+1. Always inherit from `GraphNode`
 2. Mark one property with `[NodePrimaryKey]`
-3. Use `[NodeProperty]` for properties to be stored in Neo4j
+3. Use `[NodeProperty]` for properties to be stored in Neo4j (do NOT add to properties where there is only null values in the TrainFromJson)
 4. Use `[NodeRelationshipAttribute<T>]` for relationship properties
 5. Implement the abstract `BuildDisplayName()` method
 
 Example:
 ```csharp
-public class Movie : SampleGraphNode
+public class Movie : GraphNode
 {
     [NodePrimaryKey]
     public string Title { get; set; }
@@ -80,7 +80,7 @@ Example:
 ```csharp
 public class MovieNodeService : FileNodeService<Movie>
 {
-    public MovieNodeService(IConfiguration config) : base(config)
+    public MovieNodeService(IConfiguration config, IDataRefreshPolicy dataRefreshPolicy) : base(config, dataRefreshPolicy)
     {
     }
 }
@@ -102,7 +102,11 @@ builder.Services.AddSingleton<INodeService, MovieNodeService>();
 3. Register all node services in the DI container
 4. Configure connection settings in appsettings.json
 5. Use the dataSourceService to access nodes across the application
-6. Always include a custom implementation of `BuildDisplayName()` for better readability
+6. Always include a custom implementation of `BuildDisplayName()`
+
+## .Net C# Recommendations
+1. Use `var` for local variable declarations when the type is clear from the right-hand side
+2. Use collection expressions where possible (e.g., `var list = [ "item1", "item2" ];`)
 
 ## Cypher Query Recommendations
 
@@ -126,3 +130,25 @@ The application expects Neo4j connection details in appsettings.json:
 ```
 
 For AuraDB, use the instance ID in the Connection string instead of "localhost".
+
+## String Construction Guidelines
+
+- When creating multi-line strings, use C# raw string literals (triple quotes) and string interpolation where possible.
+- Do **not** use `StringBuilder` for code generation or multi-line string construction unless there is a clear performance or mutability requirement.
+- Prefer readable, idiomatic C# string construction for templates and generated code.
+
+## Child Object Modeling Guidelines
+When deciding whether to model a child object as a separate node:
+
+Model as a separate node if:
+
+- The object is reused across multiple parent nodes (e.g., SKU, Tag).
+- The object has a complex structure or nested properties.
+- The object is meaningful on its own and may be queried or related independently.
+- The object’s data is likely to be analyzed, filtered, or joined across multiple parent nodes.
+Otherwise, flatten as properties (default behaviour in the code).
+
+Only model as a separate node if you foresee querying or relating the child object independently, or if the structure is complex and may evolve.
+Relationship Naming:
+
+Use descriptive, UPPERCASE_WITH_UNDERSCORES relationship names (e.g., HAS_SKU, HAS_NETWORK_ACLS).
