@@ -1,48 +1,66 @@
-﻿using System.Globalization;
-using System.Text;
-using System.Text.RegularExpressions;
+﻿using Microsoft.Extensions.Logging;
 
-public static class IdGenerator
+namespace Neo4jLiteRepo.Helpers
 {
-    private static readonly Random Random = new();
-
-    public static string GenerateDeterministicId(string fromText, int maxLength = 50)
+    /// <summary>
+    /// Provides methods for generating deterministic IDs based on text content.
+    /// </summary>
+    public static class IdGenerator
     {
-        if (string.IsNullOrWhiteSpace(fromText))
-            return $"section-{Guid.NewGuid()}";
+        private static readonly ILogger _logger = LoggingProvider.CreateLogger(typeof(IdGenerator).FullName);
 
-        // Slugify the title
-        var slug = RemoveDiacritics(fromText.ToLowerInvariant());
-        slug = Regex.Replace(slug, @"[^a-z0-9\s-]", ""); // remove special characters
-        slug = Regex.Replace(slug, @"[\s-]+", " ").Trim(); // collapse whitespace
-        slug = slug.Replace(" ", "-"); // replace spaces with dashes
-
-        // Fallback
-        if (string.IsNullOrWhiteSpace(slug))
-            return $"section-{Guid.NewGuid()}";
-
-        // Enforce preferred length
-        if (slug.Length > maxLength)
+        /// <summary>
+        /// Generates a deterministic ID from the provided text.
+        /// </summary>
+        /// <param name="fromText">The text to generate the ID from.</param>
+        /// <param name="prefix">Optional prefix to add to the generated ID.</param>
+        /// <param name="maxLength">Maximum length of the generated ID.</param>
+        /// <returns>A deterministic ID based on the input text or a GUID if text is invalid.</returns>
+        public static string GenerateDeterministicId(string fromText, string prefix = "", int maxLength = 128)
         {
-            slug = slug.Substring(0, maxLength);
+            if (string.IsNullOrWhiteSpace(fromText))
+            {
+                _logger.LogWarning("Empty text provided for ID generation, using GUID with prefix '{Prefix}'", prefix);
+                return $"{prefix}{GetNewGuid()}";
+            }
+            fromText = fromText.Trim();
 
-            // Ensure last char is alphanumeric
-            while (slug.Length > 0 && !char.IsLetterOrDigit(slug[^1]))
-                slug = slug[..^1];
+            // Slugify the title
+            var slug = ExtensionMethods.Slugify(fromText);
 
-            if (slug.Length == 0)
-                return $"section-{Guid.NewGuid()}";
+            // Fallback
+            if (string.IsNullOrWhiteSpace(slug))
+            {
+                _logger.LogWarning("Slugify resulted in empty string, using GUID with prefix '{Prefix}'", prefix);
+                return $"{prefix}{GetNewGuid()}";
+            }
+
+            slug = $"{prefix}{slug}";
+
+            // Enforce preferred length
+            if (slug.Length > maxLength)
+            {
+                slug = slug.Substring(0, maxLength);
+
+                // Ensure last char is alphanumeric
+                while (slug.Length > 0 && !char.IsLetterOrDigit(slug[^1]))
+                    slug = slug[..^1];
+
+                if (slug.Length == 0)
+                {
+                    _logger.LogWarning("After trimming, slug became empty, using GUID with prefix '{Prefix}'", prefix);
+                    return $"{prefix}{GetNewGuid()}";
+                }
+            }
+
+            return slug;
         }
 
-        return slug;
-    }
-    
-    private static string RemoveDiacritics(string text)
-    {
-        var normalized = text.Normalize(NormalizationForm.FormD);
-        return new string(normalized
-            .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
-            .ToArray())
-            .Normalize(NormalizationForm.FormC);
+        private static Guid GetNewGuid()
+        {
+            var guid = Guid.NewGuid();
+            _logger.LogWarning("Generated new GUID for an ID");
+            return guid;
+        }
     }
 }

@@ -1,4 +1,6 @@
-﻿using Neo4jLiteRepo.NodeServices;
+﻿using System.Globalization;
+using System.Text;
+using Neo4jLiteRepo.NodeServices;
 using System.Text.RegularExpressions;
 
 namespace Neo4jLiteRepo.Helpers
@@ -61,6 +63,21 @@ namespace Neo4jLiteRepo.Helpers
 
             return value;
         }
+        public static object? SanitizeForCypher(this object? value)
+        {
+            return value is null ? 
+                value
+                : value.ToString().SanitizeForCypher();
+        }
+        public static object? SanitizeForCypher(this string? value)
+        {
+            if (value is null)
+                return value;
+
+            return value.
+                Replace("\\", "\\\\")  // Escape backslashes
+                .Replace("\"", "\\\""); // Escape double quotes
+        }
 
         /// <summary>
         /// camelCaseLikeThis
@@ -105,6 +122,25 @@ namespace Neo4jLiteRepo.Helpers
         {
             return bool.TryParse(value.ToString(), out _);
         }
+        /// <summary>
+        /// Converts a string to a URL-friendly slug.
+        /// </summary>
+        public static string Slugify(this string fromText)
+        {
+            var slug = RemoveDiacritics(fromText.ToLowerInvariant());
+            slug = Regex.Replace(slug, @"[^a-z0-9\s-]", ""); // remove special characters
+            slug = Regex.Replace(slug, @"[\s-]+", " ").Trim(); // collapse whitespace
+            slug = slug.Replace(" ", "-"); // replace spaces with dashes
+            return slug;
+        }
 
+        private static string RemoveDiacritics(string text)
+        {
+            var normalized = text.Normalize(NormalizationForm.FormD);
+            return new string(normalized
+                    .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
+                    .ToArray())
+                .Normalize(NormalizationForm.FormC);
+        }
     }
 }

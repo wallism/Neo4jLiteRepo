@@ -7,6 +7,9 @@ namespace Neo4jLiteRepo;
 
 public abstract class GraphNode
 {
+    // ReSharper disable once PublicConstructorInAbstractClass
+    public GraphNode() { } // required to satisfy new() constraint
+
     public override string ToString() => $"{DisplayName}";
 
     /// <summary>
@@ -30,7 +33,7 @@ public abstract class GraphNode
     /// <summary>
     /// Unique identifier for the node
     /// </summary>
-    public virtual required string Id { get; set; }
+    public virtual string Id { get; set; }
 
 
     /// <summary>
@@ -71,12 +74,12 @@ public abstract class GraphNode
         if (pkProperties == null)
             throw new InvalidOperationException($"No property decorated with [NodePrimaryKey] found on {GetType().Name}.");
 
-        // If we allow abstract classes, the attribute will likely be declared on concrete classes too,
-        // then the logic that uses this attribute may not work as expected, because it returns the FIRST property it finds with this attribute.
-        // If the base class is the ONLY declaration, then allow it.
         var propertyInfos = pkProperties as PropertyInfo[]
                             ?? pkProperties.ToArray();
 
+        // If we allow abstract classes, the attribute will likely be declared on concrete classes too,
+        // then the logic that uses this attribute may not work as expected, because it returns the FIRST property it finds with this attribute.
+        // If the base class is the ONLY declaration, then allow it.
         if (propertyInfos.Count() > 1 && propertyInfos.Any(p => p.DeclaringType?.IsAbstract ?? false))
             throw new InvalidOperationException("NodePrimaryKeyAttribute cannot be applied to abstract classes.");
 

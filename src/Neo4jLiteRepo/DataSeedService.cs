@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.NodeServices;
@@ -8,6 +9,7 @@ namespace Neo4jLiteRepo
     public interface IDataSeedService
     {
         Task<bool> SeedAllData();
+        Task LoadExistingNodesFromGraphAsync<T>() where T : GraphNode, new();
     }
 
 
@@ -16,7 +18,8 @@ namespace Neo4jLiteRepo
         INeo4jGenericRepo graphRepo,
         IDataSourceService dataSourceService,
         IDataRefreshPolicy dataRefreshPolicy,
-        IServiceProvider serviceProvider)
+        IServiceProvider serviceProvider,
+        IConfiguration configuration) // Inject IConfiguration
         : IDataSeedService
     {
 
@@ -36,6 +39,7 @@ namespace Neo4jLiteRepo
             {
                 // it might be a fresh database or we might have new Labels, ensure unique constraints
                 await EnforceUniqueConstraints().ConfigureAwait(false);
+                await graphRepo.CreateVectorIndexForEmbeddings(["ContentChunk"]);
                 // Why seed all nodes first? Because we need to have all nodes in the graph before we can create relationships
                 await SeedAllNodes().ConfigureAwait(false);
                 await SeedAllNodeRelationships().ConfigureAwait(false);
@@ -47,6 +51,34 @@ namespace Neo4jLiteRepo
             }
             logger.LogInformation("SeedAllData Complete!");
             return true;
+        }
+
+        /// <summary>
+        /// Loads existing nodes for specified types from the graph database and registers them in DataSourceService.
+        /// </summary>
+        public async Task LoadExistingNodesFromGraphAsync<T>() where T : GraphNode, new()
+        {
+            var labelName = typeof(T).Name.ToPascalCase();
+            try
+            {
+                // Build Cypher query to get all nodes of this type
+                var query = $"MATCH (n:{labelName}) RETURN n as nodes";
+
+                var result = await graphRepo.ExecuteReadListAsync<T>(query, "nodes" ).ConfigureAwait(false);
+
+                var nodeList = result.ToList();
+
+                if (nodeList.Any())
+                {
+                    dataSourceService.AddSourceNodes(labelName, nodeList);
+                    logger.LogInformation("Preloaded {count} nodes of type {typeName} from graph DB.", nodeList.Count, labelName);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error preloading nodes of type {typeName} from graph DB.", labelName);
+            }
+
         }
 
         private async Task<bool> EnforceUniqueConstraints()

@@ -118,7 +118,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     /// </summary>
     /// <remarks>put into memory for later use, to allow for different
     /// ways of processing the data. </remarks>
-    public async Task<bool> LoadAllNodeDataAsync()
+    public async Task<bool> LoadAllNodeDataAsync() 
     {
         var loaders = serviceProvider.GetServices<INodeService>()
             .OrderBy(s => s.LoadPriority);

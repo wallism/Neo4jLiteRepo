@@ -8,7 +8,7 @@ namespace Neo4jLiteRepo.NodeServices;
 /// Simplest implementation of a FileNodeService that reads data from JSON files.
 /// </summary>
 /// <typeparam name="T"></typeparam>
-public abstract class FileNodeService<T>(IConfiguration config,
+public abstract class FileNodeService<T>(IConfiguration config, 
     IDataRefreshPolicy dataRefreshPolicy) : INodeService
     where T : GraphNode
 {
@@ -48,16 +48,7 @@ public abstract class FileNodeService<T>(IConfiguration config,
                     return result;
             }
 
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"read data from file {fileName}");
-            Console.ResetColor();
-
-            var json = await File.ReadAllTextAsync(fullFilePath);
-            var data = JsonConvert.DeserializeObject<IList<GraphNode>>(json, new JsonSerializerSettings
-            {
-                TypeNameHandling = TypeNameHandling.Auto // Ensures polymorphic deserialization
-            });
-
+            var data = await LoadDataFromFile(fullFilePath);
             return data ?? [];
         }
         catch (Exception ex)
@@ -65,6 +56,30 @@ public abstract class FileNodeService<T>(IConfiguration config,
             Console.WriteLine(ex);
             throw;
         }
+    }
+
+    protected async Task<IList<GraphNode>?> LoadDataFromFile(string fullFilePath)
+    {
+        var fileName = Path.GetFileName(fullFilePath);
+
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine($"read data from file {fileName}");
+        Console.ResetColor();
+
+        if (!File.Exists(fullFilePath))
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"file {fileName} does not exist");
+            Console.ResetColor();
+            return [];
+        }
+
+        var json = await File.ReadAllTextAsync(fullFilePath);
+        var data = JsonConvert.DeserializeObject<IList<GraphNode>>(json, new JsonSerializerSettings
+        {
+            TypeNameHandling = TypeNameHandling.Auto // Ensures polymorphic deserialization
+        });
+        return data;
     }
 
     /// <summary>
@@ -110,7 +125,33 @@ public abstract class FileNodeService<T>(IConfiguration config,
                 TypeNameHandling = TypeNameHandling.Auto, // Enables polymorphic serialization
                 ContractResolver = new ExcludeTypeGenerationContractResolver()
             });
+
             var filePath = GetFullFilePath(fileName);
+
+            // If the full file path is longer than 260 characters, trim the filename while preserving the extension
+            const int maxPathLength = 260;
+            if (filePath.Length > maxPathLength)
+            {
+                var directory = Path.GetDirectoryName(filePath) ?? string.Empty;
+                var originalFileName = Path.GetFileNameWithoutExtension(filePath);
+                var extension = Path.GetExtension(filePath);
+
+                // Calculate max allowed length for the filename
+                var maxFileNameLength = maxPathLength - directory.Length - extension.Length - 1; // -1 for path separator
+
+                if (maxFileNameLength > 0 && originalFileName.Length > maxFileNameLength)
+                {
+                    var trimmedFileName = originalFileName[..maxFileNameLength];
+                    filePath = Path.Combine(directory, trimmedFileName + extension);
+                }
+            }
+
+            // Ensure the directory exists before writing the file
+            var directoryPath = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directoryPath) && !Directory.Exists(directoryPath))
+            {
+                Directory.CreateDirectory(directoryPath);
+            }
 
             await File.WriteAllTextAsync(filePath, json);
         }

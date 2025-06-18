@@ -12,6 +12,7 @@ namespace Neo4jLiteRepo
     public interface INeo4jGenericRepo : IDisposable
     {
         Task<bool> EnforceUniqueConstraints(IEnumerable<INodeService> nodeServices);
+        Task<bool> CreateVectorIndexForEmbeddings(IList<string>? labelNames = null, int dimensions = 3072);
 
         Task<bool> UpsertNodes<T>(IEnumerable<T> nodes) where T : GraphNode;
         Task<bool> UpsertNode<T>(T node) where T : GraphNode;
@@ -24,10 +25,23 @@ namespace Neo4jLiteRepo
         Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync();
         Task<NodeRelationshipsResponse> GetNodesAndRelationshipsAsync(IAsyncSession session);
 
-        Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null);
+        Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null) where T : new();
 
-        Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null);
-
+        Task<IEnumerable<string>> ExecuteReadListStringsAsync(string query, string returnObjectKey, IDictionary<string, object>? parameters = null);
+        
+        Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null);        /// <summary>
+        /// Executes a vector similarity search query to find relevant content chunks
+        /// </summary>
+        /// <param name="questionEmbedding">The embedding vector of the question</param>
+        /// <param name="topK">Number of most relevant chunks to return</param>
+        /// <param name="includeContext">Whether to include related chunks and parent context</param>
+        /// <param name="similarityThreshold">Minimum cosine similarity threshold (0-1) for matching content</param>
+        /// <returns>A list of strings containing the content and article information</returns>
+        Task<List<string>> ExecuteVectorSimilaritySearchAsync(
+            float[] questionEmbedding, 
+            int topK = 5, 
+            bool includeContext = true,
+            double similarityThreshold = 0.6);
     }
 
     public class Neo4jGenericRepo(ILogger<Neo4jGenericRepo> logger,
@@ -159,7 +173,7 @@ namespace Neo4jLiteRepo
 
                 if (value is IEnumerable<string> enumerable)
                 {
-                    var stringList = enumerable.Select(x => $"\"{x}\"");
+                    var stringList = enumerable.Select(x => $"\"{x.SanitizeForCypher()}\"");
                     yield return $"n.{propertyName} = [{string.Join(", ", stringList)}]";
                     continue;
                 }
@@ -187,7 +201,7 @@ namespace Neo4jLiteRepo
                 //}
 
                 // Add the current property (as string)
-                yield return $"n.{propertyName} = \"{value.AutoRedact(propertyName)}\"";
+                yield return $"n.{propertyName} = \"{value.SanitizeForCypher().AutoRedact(propertyName)}\"";
             }
         }
 
@@ -236,7 +250,8 @@ namespace Neo4jLiteRepo
 
                 if (relationshipAttribute != null)
                 {
-                    var relatedNodeType = relationshipAttribute.GetType().GetGenericArguments()[0].Name;
+                    var relatedNodeType = relationshipAttribute.GetType().GetGenericArguments()[0];
+                    var relatedNodeTypeName = relatedNodeType.Name;
                     //var relationshipType = relationshipAttribute.GetType().GetGenericArguments()[0];
                     var relationshipName = relationshipAttribute.GetType().GetProperty("RelationshipName")?.
                         GetValue(relationshipAttribute)?.ToString()?.ToUpper();
@@ -247,7 +262,7 @@ namespace Neo4jLiteRepo
                         return false;
                     }
 
-                    if (string.IsNullOrWhiteSpace(relatedNodeType))
+                    if (string.IsNullOrWhiteSpace(relatedNodeTypeName))
                     {
                         logger.LogError("relatedNodeType is null or empty {NodeType}.", nodeType.Name);
                         return false;
@@ -255,14 +270,78 @@ namespace Neo4jLiteRepo
 
                     if (property.GetValue(fromNode) is IEnumerable<string> relatedNodes)
                     {
-                        foreach (var toNodeName in relatedNodes)
+                        foreach (var toNodeId in relatedNodes)
                         {
                             // relatedNode string indicates which GraphNode this node relates to
-                            var toNode = dataSourceService.GetSourceNodeFor<GraphNode>(relatedNodeType, toNodeName);
+                            var toNode = dataSourceService.GetSourceNodeFor<GraphNode>(relatedNodeTypeName, toNodeId);
                             if (toNode == null)
                             {
-                                logger.LogError("toNode is null {NodeType} {toNodeName} (in a source that is not loaded?)", relatedNodeType, toNodeName);
-                                continue; // skip to next related node
+                                // Try to load the node from the graph DB if not found in memory
+                                // We need to get the primary key property name for the related node type
+                                var pkName = fromNode.GetPrimaryKeyName(); // fallback if not available for relatedNodeType
+                                if (Activator.CreateInstance(relatedNodeType) is GraphNode tempInstance)
+                                    pkName = tempInstance.GetPrimaryKeyName();
+
+                                // Properly escape curly braces in interpolated string
+                                var toNodeQuery = $"MATCH (n:{relatedNodeTypeName} {{ {pkName}: '{toNodeId}' }}) RETURN n LIMIT 1";
+                                
+                                // Use reflection to call ExecuteReadListAsync with the proper generic type parameter
+                                var executeMethod = typeof(Neo4jGenericRepo).GetMethod(nameof(ExecuteReadListAsync), new[] { typeof(string), typeof(string), typeof(IDictionary<string, object>) })
+                                    ?.MakeGenericMethod(relatedNodeType);
+                                
+                                if (executeMethod == null)
+                                {
+                                    logger.LogError("Failed to create generic method for ExecuteReadListAsync with type {relatedNodeType}", relatedNodeTypeName);
+                                    continue;
+                                }                                // Create empty dictionary for parameters to avoid null
+                                var emptyParams = new Dictionary<string, object>();
+                                
+                                try 
+                                {
+                                    // Directly invoke and await the task
+                                    var taskObj = executeMethod.Invoke(this, [toNodeQuery, "n", emptyParams]);
+                                    
+                                    if (taskObj is Task resultTask)
+                                    {
+                                        // Wait for the task to complete
+                                        await resultTask.ConfigureAwait(false);
+                                        
+                                        // Get the result using reflection
+                                        var resultProperty = resultTask.GetType().GetProperty("Result");
+                                        if (resultProperty != null)
+                                        {
+                                            var queryResult = resultProperty.GetValue(resultTask);
+                                            
+                                            // Process results if they exist
+                                            if (queryResult is IEnumerable<object> objectResults)
+                                            {
+                                                var nodeObj = objectResults.FirstOrDefault();
+                                                if (nodeObj is GraphNode graphNode)
+                                                {
+                                                    toNode = graphNode;
+                                                }
+                                            }
+                                            else if (queryResult is System.Collections.IEnumerable enumerable)
+                                            {
+                                                // Handle non-generic IEnumerable
+                                                var enumerator = enumerable.GetEnumerator();
+                                                if (enumerator.MoveNext() && enumerator.Current is GraphNode foundNode)
+                                                {
+                                                    toNode = foundNode;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogError(ex, "Error executing query for node type {relatedNodeType}", relatedNodeTypeName);
+                                }
+                                if (toNode == null)
+                                {
+                                    logger.LogError("toNode is null {NodeType} {toNodeName} (not found in memory or DB)", relatedNodeTypeName, toNodeId);
+                                    continue; // skip to next related node
+                                }
                             }
                             logger.LogInformation("{from}-[{relationship}]->{to}", fromNode.DisplayName, relationshipName, toNode.DisplayName);
 
@@ -323,7 +402,7 @@ namespace Neo4jLiteRepo
                 var baseType = type.BaseType;
                 if (baseType == null || !baseType.IsGenericType)
                     continue;
-                var genericType = baseType.GetGenericArguments()[0]; // Should be typeof(Movie)
+                var genericType = baseType.GetGenericArguments()[0]; // e.g. typeof(Movie)
                 if (Activator.CreateInstance(genericType) is GraphNode instance)
                 {
                     var query = GetUniqueConstraintCypher(instance);
@@ -334,8 +413,46 @@ namespace Neo4jLiteRepo
             return true;
         }
 
+        /// <summary>
+        /// Allows for multiple nodes having embeddings and vector indexes,
+        /// however one is usually better when searching for semantic meaning across all data.
+        /// </summary>
+        /// <remarks>the nodes must have an "embedding" property.
+        /// note: defaults to 3072 dimensions (for text-embedding-3-large).</remarks>
+        public async Task<bool> CreateVectorIndexForEmbeddings(IList<string>? labelNames = null, int dimensions = 3072)
+        {
+            if (labelNames is null || !labelNames.Any())
+                return true;
 
-        public async Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
+            /*
+             * text-embedding-3-large | 3072 dimensions
+             * text-embedding-ada-002 | 1536 dimensions
+             * Important: If the embedding model changes, the index MUST be dropped and rebuilt!
+             *
+             * todo: auto set the dimensions based on the embedding model (used in AI layer)
+             */
+
+            await using var session = neo4jDriver.AsyncSession();
+            foreach (var labelName in labelNames)
+            {
+                var query = $$"""
+                               CREATE VECTOR INDEX {{labelName.ToLower()}}_chunk_embedding IF NOT EXISTS
+                               FOR (c:{{labelName}}) 
+                               ON c.embedding
+                               OPTIONS {
+                                indexConfig: {
+                                   `vector.dimensions`: {{dimensions}},
+                                   `vector.similarity_function`: 'cosine'
+                                } 
+                               }
+                               """;
+                await ExecuteWriteQuery(session, query);
+            }
+
+            return true;
+        }
+
+        public async Task<IEnumerable<string>> ExecuteReadListStringsAsync(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
         {
             await using var session = neo4jDriver.AsyncSession();
             try
@@ -349,8 +466,7 @@ namespace Neo4jLiteRepo
 
                     // Assuming the returned value is a list of objects (like ["a", "b", "c"])
                     var list = records
-                        .SelectMany(x => x[returnObjectKey].As<List<object>>())
-                        .Select(o => (T)Convert.ChangeType(o, typeof(T)))
+                        .SelectMany(x => x[returnObjectKey].As<List<string>>())
                         .Distinct()
                         .ToList();
 
@@ -366,6 +482,88 @@ namespace Neo4jLiteRepo
             }
         }
 
+        public async Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query,
+            string returnObjectKey, IDictionary<string, object>? parameters = null) where T : new()
+        {
+            await using var session = neo4jDriver.AsyncSession();
+            try
+            {
+                parameters ??= new Dictionary<string, object>();
+
+                var result = await session.ExecuteReadAsync(async tx =>
+                {
+                    var res = await tx.RunAsync(query, parameters);
+                    var records = await res.ToListAsync();
+
+                    // Assuming the returned value is a list of objects (like ["a", "b", "c"])
+                    var list = records
+                        .Select(record => MapNodeToObject<T>(record[returnObjectKey].As<INode>()))
+                        .Distinct()
+                        .ToList();
+
+                    return list;
+                });
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Problem executing {query}", query);
+                throw;
+            }
+        }
+
+        private T MapNodeToObject<T>(INode node) where T : new()
+        {
+            var obj = new T();
+            var tProperties = typeof(T).GetProperties()
+                .Where(p => p.SetMethod != null && p.SetMethod.IsPublic)
+                .ToArray();
+
+            foreach (var tProp in tProperties)
+            {
+                var tPropertyName = tProp.Name.ToGraphPropertyCasing();
+                if (node.Properties.TryGetValue(tPropertyName, out var value))
+                {
+                    if (value == null)
+                        continue;
+
+                    // Handle float[] (Single[]) property type
+                    if (tProp.PropertyType == typeof(float[]))
+                    {
+                        if (value is IEnumerable<object> objArray)
+                        {
+                            var floatArray = objArray.Select(Convert.ToSingle).ToArray();
+                            tProp.SetValue(obj, floatArray);
+                        }
+                        else if (value is float[] floatArray)
+                        {
+                            tProp.SetValue(obj, floatArray);
+                        }
+                        else if (value is double[] doubleArray)
+                        {
+                            tProp.SetValue(obj, doubleArray.Select(d => (float)d).ToArray());
+                        }
+                        continue;
+                    }
+
+                    if (tProp.PropertyType == typeof(Guid))
+                    {
+                        if (value is string stringValue && Guid.TryParse(stringValue, out var guidValue))
+                        {
+                            tProp.SetValue(obj, guidValue);
+                        }
+                        continue;
+                    }
+
+                    // Handle type conversion for other types
+                    var convertedValue = Convert.ChangeType(value, tProp.PropertyType);
+                    tProp.SetValue(obj, convertedValue);
+                }
+            }
+
+            return obj;
+        }
 
         /// <summary>
         /// Execute read scalar as an asynchronous operation.
@@ -478,8 +676,161 @@ namespace Neo4jLiteRepo
         public async ValueTask DisposeAsync()
         {
             await neo4jDriver.DisposeAsync();
+        }        
+        
+        /// <summary>
+        /// Executes a vector similarity search query to find relevant content chunks
+        /// </summary>
+        /// <param name="questionEmbedding">The embedding vector of the question</param>
+        /// <param name="topK">Number of most relevant chunks to return</param>
+        /// <param name="includeContext">Whether to include related chunks and parent context</param>
+        /// <param name="similarityThreshold">Minimum cosine similarity threshold (0-1) for matching content. 
+        /// Higher values (e.g. 0.8) will return only very close matches and may result in fewer results.
+        /// Lower values (e.g. 0.5) will return more results but may include less relevant content.
+        /// Values between 0.6-0.75 are typically a good starting point.</param>
+        /// <returns>A list of strings containing the content and article information</returns>
+        public async Task<List<string>> ExecuteVectorSimilaritySearchAsync(
+            float[] questionEmbedding, 
+            int topK = 20, 
+            bool includeContext = true,
+            double similarityThreshold = 0.7)
+        {
+            var query = await GetCypherFromFile("ExecuteVectorSimilaritySearch.cypher", logger);
+
+            await using var session = neo4jDriver.AsyncSession();
+            var result = await session.ExecuteReadAsync(async tx =>
+            {               
+                // Run the query
+                var cursor = await tx.RunAsync(query, new
+                {
+                    questionEmbedding,
+                    topK
+                });
+
+                // Process results
+                var resultsDict = new Dictionary<string, Dictionary<string, object>>();
+                
+                await foreach (var record in cursor)
+                {
+                    var id = record["id"].As<string>();
+                    
+                    // If we've already seen this chunk, skip it (avoid duplicates)
+                    if (resultsDict.ContainsKey(id))
+                        continue;
+                    
+                    resultsDict[id] = new Dictionary<string, object>
+                    {
+                        ["id"] = id,
+                        ["content"] = record["content"].As<string>(),
+                        ["articleTitle"] = record["articleTitle"].As<string>(),
+                        ["articleUrl"] = record["articleUrl"].As<string>(),
+                        ["score"] = record["score"].As<double>(),
+                        ["entities"] = record["entities"].As<List<string>>(),
+                        ["sequenceOrder"] = record["sequenceOrder"].As<int>(),
+                        ["resultType"] = record["resultType"].As<string>()
+                    };
+                }
+                
+                // Sort by article title and sequence order for better readability
+                var sortedResults = resultsDict.Values
+                    .OrderBy(r => r["articleTitle"].ToString())
+                    .ThenBy(r => (int)r["sequenceOrder"])
+                    .ToList();
+                
+                // Format results to return
+                var formattedResults = new List<string>();
+
+                var currentArticle = "";
+                foreach (var result in sortedResults)
+                {
+                    var articleTitle = result["articleTitle"]?.ToString() ?? "Unknown Article";
+                    var articleUrl = result["articleUrl"]?.ToString() ?? "no-link";
+                    
+                    // If we're starting a new article, add a header
+                    if (articleTitle != currentArticle)
+                    {
+                        if (formattedResults.Count > 0)
+                            formattedResults.Add($"-- end article: {currentArticle} --");  // Add a clear delimiter between articles for LLM context
+                            
+                        formattedResults.Add($"-- start article: {articleTitle} --");
+                        formattedResults.Add($"article url: {articleUrl}");
+                        currentArticle = articleTitle;
+                    }
+                      
+                    // Add content with prefix based on result type
+                    var prefix = "";
+                    var resultType = result["resultType"]?.ToString() ?? "unknown";
+                    
+                    if (resultType == "main")
+                        prefix = "▶️ ";  // Highlight the main matches
+                    else if (resultType == "next")
+                        prefix = "⏩ ";  // Context that follows
+                    else if (resultType == "previous") 
+                        prefix = "⏪ ";  // Context that precedes
+                    else if (resultType == "sibling")
+                        prefix = "🔄 ";  // Related content
+                    else if (resultType == "section_related")
+                        prefix = "📑 ";  // Section-related content
+                    else if (resultType == "subsection_related")
+                        prefix = "📋 ";  // SubSection-related content
+                        
+                    var entities = result["entities"] as List<string> ?? new List<string>();
+                    var entityInfo = entities.Any() ? $" [Entities: {string.Join(", ", entities)}]" : "";
+
+                    var content = $"{prefix}{result["content"]}{entityInfo}";
+                    if(!formattedResults.Contains(content) && !string.IsNullOrWhiteSpace(content))
+                        formattedResults.Add(content);
+                }
+                
+                return formattedResults;
+            });
+
+            return result;
         }
+
+        /// <summary>
+        /// Gets a Cypher query from a .cypher file in the Queries directory
+        /// </summary>
+        /// <param name="fileName">The name of the .cypher file without path</param>
+        /// <param name="logger">Logger instance for logging messages</param>
+        /// <returns>The contents of the Cypher query file as a string</returns>
+        /// <exception cref="FileNotFoundException">Thrown when the query file cannot be found</exception>
+        private static async Task<string> GetCypherFromFile(string fileName, ILogger<Neo4jGenericRepo> logger)
+        {
+            // Read the Cypher query from file
+            var queryFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Queries", fileName);
+            
+            // If file doesn't exist at runtime location, try to find it relative to the source code
+            if (!File.Exists(queryFilePath))
+            {
+                var projectPath = Path.GetDirectoryName(typeof(Neo4jGenericRepo).Assembly.Location);
+                while (projectPath != null && !Directory.Exists(Path.Combine(projectPath, "Queries")))
+                {
+                    projectPath = Directory.GetParent(projectPath)?.FullName;
+                }
+                
+                if (projectPath != null)
+                {
+                    queryFilePath = Path.Combine(projectPath, "Queries", fileName);
+                }
+            }
+            
+            // Load query from file
+            if (File.Exists(queryFilePath))
+            {
+                var query = await File.ReadAllTextAsync(queryFilePath);
+                logger.LogDebug("Loaded Cypher query from file: {FilePath} {length}", queryFilePath, query.Length);
+                if(query.Length == 0)
+                    throw new FileNotFoundException("Cypher query file is empty.", queryFilePath);
+                return query;
+            }
+            else
+            {
+                // Log error and throw exception
+                logger.LogError("Could not find Cypher query file at {FilePath}", queryFilePath);
+                throw new FileNotFoundException("Cypher query file not found.", queryFilePath);
+            }
+        }
+
     }
-
-
 }
