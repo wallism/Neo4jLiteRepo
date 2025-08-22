@@ -8,14 +8,21 @@ Neo4jLiteRepo is a .NET library designed to simplify Neo4j database interactions
 - **Neo4jLiteRepo.Sample**: Example node models and node services
 - **Neo4jLiteRepo.Tests**: Unit tests for the library
 
-## Key Concepts
 
-### Node Modeling
+## Key Concepts & Recent Changes
+
+### Node Modeling (`GraphNode`)
 - All node models inherit from `GraphNode`.
 - Mark one property with `[NodePrimaryKey]` (must be unique).
 - Use `[NodeProperty]` for properties to be stored in Neo4j.
 - Use `[NodeRelationship<T>]` for relationship properties (must be `IEnumerable<string>` containing primary key values of related nodes).
 - Implement the abstract `BuildDisplayName()` method for each node.
+- **New:**
+  - Improved primary key handling: `GraphNode` now enforces that only one property is decorated with `[NodePrimaryKey]` and throws clear exceptions if not found or misused.
+  - Added `GetPrimaryKeyName()` and `GetPrimaryKeyValue()` for robust access to primary key info.
+  - Added `GetMainContent()` as an abstract method for custom node content extraction.
+  - `LabelName` and `NodeDisplayNameProperty` are now virtual and use helper extensions for casing.
+  - `Upserted` property tracks last upsert time (auto-set).
 
 **Example:**
 ```csharp
@@ -31,6 +38,7 @@ public class Movie : GraphNode
     public IEnumerable<string> Genres { get; set; }
 
     public override string BuildDisplayName() => Title;
+    public override string GetMainContent() => $"{Title} ({Released})";
 }
 ```
 
@@ -47,8 +55,16 @@ builder.Services.AddSingleton<INodeService, MovieNodeService>();
 - Relationship names should be descriptive and UPPERCASE_WITH_UNDERSCORES (e.g., `HAS_GENRE`).
 - Both sides of a relationship should be defined for bidirectionality if needed.
 
-### Repository Usage
+
+### Repository Usage (`Neo4jGenericRepo`)
 - `Neo4jGenericRepo` is the main entry point for database operations (node/relationship upsert, Cypher queries, constraints).
+- **Recent API additions:**
+  - Expanded overloads for upserting nodes and relationships, supporting session and transaction management for batching and atomicity.
+  - New methods for enforcing unique constraints, creating vector indexes, and streaming query results.
+  - Improved error handling and diagnostics for node/relationship operations.
+  - Methods for orphan node removal, batch relationship deletion, and vector similarity search.
+- **Performance Note:**
+  - The repository now passes the parameters dictionary directly to Cypher queries, resulting in significant performance improvements for large and complex operations. Always use parameterized queries for best results.
 - Prefer repository methods over custom Cypher unless advanced queries are needed.
 
 ## Getting Started
@@ -129,13 +145,15 @@ RETURN n, r, m
 
 > **Tip:** Adjust configuration to control which properties are modeled as relationships, which are included/excluded, and naming conventions.
 
+
 ## Best Practices
 - Use descriptive, unique primary keys for each node type.
 - Use UPPERCASE_WITH_UNDERSCORES for relationship names.
 - Only model child objects as separate nodes if they are reused, complex, or independently queried.
-- Always implement `BuildDisplayName()` for each node.
+- Always implement `BuildDisplayName()` and `GetMainContent()` for each node.
 - Use C# raw string literals for multi-line strings.
 - Prefer idiomatic, readable C# over premature optimization.
+- Use repository overloads for efficient batching and atomic operations.
 
 ## Logging & Configuration
 - The `.Importer` project uses [Serilog](https://github.com/serilog/serilog`) for logging (optional).
