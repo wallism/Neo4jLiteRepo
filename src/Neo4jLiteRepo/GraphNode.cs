@@ -30,6 +30,11 @@ public abstract class GraphNode
     [JsonIgnore]
     public string DisplayName => BuildDisplayName();
 
+
+    [NodeProperty("upserted")]
+    [JsonProperty("upserted", NullValueHandling = NullValueHandling.Ignore)]
+    public DateTimeOffset Upserted { get; set; } = DateTimeOffset.Now;
+
     /// <summary>
     /// Unique identifier for the node
     /// </summary>
@@ -41,13 +46,16 @@ public abstract class GraphNode
     /// </summary>
     public abstract string BuildDisplayName();
 
+    public abstract string GetMainContent();
+
     private PropertyInfo? _primaryKeyProperty;
 
     /// <summary>
     /// Name of the "Primary Key" property on the Node.
     /// </summary>
     /// <remarks>neo4j doesn't have a concept of a primary key.
-    /// This is essentially the main field that will be used when finding matches.</remarks>
+    /// This is essentially the main field that will be used when finding matches.
+    /// It should be unique.</remarks>
     public string GetPrimaryKeyName()
     {
         var pkProperty = GetPrimaryKeyProperty();

@@ -27,5 +27,7 @@ namespace Neo4jLiteRepo.Sample.Nodes
 
 
         public override string BuildDisplayName() => Title;
+
+        public override string GetMainContent() => $"{Title}";
     }
 } 

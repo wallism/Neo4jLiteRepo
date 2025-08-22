@@ -123,6 +123,7 @@ namespace Neo4jLiteRepo
 
             logger.LogInformation("Seeding {Label} {Count} nodes", graphNodes.First().GetType().Name.PadLeft(20), graphNodes.Count());
 
+            // Upsert all nodes (results ignored here; errors surface via exceptions)
             await graphRepo.UpsertNodes(graphNodes).ConfigureAwait(false);
 
             return true;

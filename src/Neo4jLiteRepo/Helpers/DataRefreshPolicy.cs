@@ -8,6 +8,7 @@ namespace Neo4jLiteRepo.Helpers
         bool AlwaysLoadFromFile { get; }
         bool ShouldRefreshNode(string nodeName);
         bool ShouldSkipNodeType(string nodeType);
+        bool UpdateAllArticles { get; }
     }
 
     public class DataRefreshPolicy : IDataRefreshPolicy
@@ -22,11 +23,17 @@ namespace Neo4jLiteRepo.Helpers
             dataRefreshPolicySettings = section.Get<DataRefreshPolicySettings>() ?? new DataRefreshPolicySettings();
         }
 
-        private bool ShouldRefreshAll()
+        public bool ShouldRefreshAll()
             => dataRefreshPolicySettings.ForceRefresh.Contains("All");
 
         public bool AlwaysLoadFromFile
             => dataRefreshPolicySettings.AlwaysLoadFromFile;
+
+        /// <summary>
+        /// Update all articles, regardless of LastUpdated.
+        /// </summary>
+        public bool UpdateAllArticles
+            => dataRefreshPolicySettings.UpdateAllArticles;
 
         public bool ShouldRefreshNode(string nodeName)
         {
@@ -54,6 +61,7 @@ namespace Neo4jLiteRepo.Helpers
             }
             return false;
         }
+
     }
 
     public class DataRefreshPolicySettings
@@ -61,5 +69,6 @@ namespace Neo4jLiteRepo.Helpers
         public List<string> ForceRefresh { get; set; } = [];
         public List<string> SkipNodeTypes { get; set; } = [];
         public bool AlwaysLoadFromFile { get; set; }
+        public bool UpdateAllArticles { get; set; } = false;
     }
 }

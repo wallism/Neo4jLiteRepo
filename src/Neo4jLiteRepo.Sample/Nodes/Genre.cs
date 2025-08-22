@@ -23,5 +23,7 @@ namespace Neo4jLiteRepo.Sample.Nodes
         public IEnumerable<string> Movies { get; set; }
 
         public override string BuildDisplayName()=> Name;
+
+        public override string GetMainContent() => $"{Description}";
     }
 }
