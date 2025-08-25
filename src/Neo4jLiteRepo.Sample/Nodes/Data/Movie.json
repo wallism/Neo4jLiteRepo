@@ -8,7 +8,18 @@
     "TestPassword": "testpasswordInJson",
     "SampleProperty": "Sample",
     "Tagline": "The adventure takes off!",
-    "Genres": [ "Animation", "Comedy" ]
+    "Genres": [
+      {
+        "$type": "Neo4jLiteRepo.Sample.Edges.MovieToGenre, Neo4jLiteRepo.Sample",
+        "TargetPrimaryKey": "1",
+        "SampleEdgeProperty": "A1" 
+      },
+      {
+        "$type": "Neo4jLiteRepo.Sample.Edges.MovieToGenre, Neo4jLiteRepo.Sample",
+        "TargetPrimaryKey": "3",
+        "SampleEdgeProperty": "A2"
+      }
+    ]
   },
   {
     "$type": "Neo4jLiteRepo.Sample.Nodes.Movie, Neo4jLiteRepo.Sample",
@@ -17,7 +28,18 @@
     "Test": "test2",
     "Released": 2003,
     "Tagline": "There are 3.7 trillion fish in the ocean. They're looking for one.",
-    "Genres": [ "Animation", "Adventure" ],
+    "Genres": [
+      {
+        "$type": "Neo4jLiteRepo.Sample.Edges.MovieToGenre, Neo4jLiteRepo.Sample",
+        "TargetPrimaryKey": "1",
+        "SampleEdgeProperty": "B1"
+      },
+      {
+        "$type": "Neo4jLiteRepo.Sample.Edges.MovieToGenre, Neo4jLiteRepo.Sample",
+        "TargetPrimaryKey": "4",
+        "SampleEdgeProperty": "B2" 
+      }
+    ],
     "TestArray": [ "justone" ]
   },
   {
@@ -26,7 +48,17 @@
     "Title": "The Incredibles",
     "Released": 2004,
     "Tagline": "No gut, no glory",
-    "Genres": [ "Animation", "Action" ],
+    "Genres": [
+      {
+        "$type": "Neo4jLiteRepo.Sample.Edges.MovieToGenre, Neo4jLiteRepo.Sample",
+        "TargetPrimaryKey": "1", 
+        "SampleEdgeProperty": "C1" },
+      {
+        "$type": "Neo4jLiteRepo.Sample.Edges.MovieToGenre, Neo4jLiteRepo.Sample",
+        "TargetPrimaryKey": "2",
+        "SampleEdgeProperty": "C2" 
+      }
+    ],
     "TestArray": ["one", "two", "three"]
   }
 ]

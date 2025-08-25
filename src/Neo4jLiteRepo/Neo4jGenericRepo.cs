@@ -9,8 +9,9 @@ using Neo4jLiteRepo.NodeServices;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Text.RegularExpressions;
+using System.Reflection.Emit;
 using System.Runtime.Serialization;
+using System.Text.RegularExpressions;
 using static Neo4jLiteRepo.Neo4jGenericRepo;
 
 namespace Neo4jLiteRepo
@@ -91,17 +92,14 @@ namespace Neo4jLiteRepo
             int topK = 5,
             bool includeContext = true,
             double similarityThreshold = 0.6);
-
-
+        
 
 
         IAsyncSession StartSession();
-        Task MergeRelationshipAsync(string fromLabel, string fromId, string rel, string toLabel, string toId, CancellationToken ct = default);
-        Task MergeRelationshipAsync(string fromLabel, string fromId, string rel, string toLabel, string toId, IAsyncTransaction tx, CancellationToken ct = default);
+
         Task MergeRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, CancellationToken ct = default);
 
         Task MergeRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, IAsyncTransaction tx, CancellationToken ct = default);
-
 
         /// <summary>
         /// Convenience overload: deletes (DETACH DELETE) nodes by id creating its own session/transaction.
@@ -281,23 +279,30 @@ namespace Neo4jLiteRepo
         {
             try
             {
-                // Merge in the common Now parameter if caller did not supply it.
-                var paramType = parameters.GetType();
-                var hasNow = paramType.GetProperties().Any(p => string.Equals(p.Name, "Now", StringComparison.OrdinalIgnoreCase));
-                var finalParams = hasNow ? parameters : new { Now, Parameters = parameters };
-                // Above anonymous combination results in a property named 'Item2'; simpler approach is build expando.
-                if (!hasNow)
+                // If caller supplies a dictionary, add Now directly
+                object finalParams;
+                if (parameters is IDictionary<string, object?> pdict)
                 {
-                    // Build an expando with existing props + Now (reflection copy)
-                    var expando = new System.Dynamic.ExpandoObject();
-                    var dict = (IDictionary<string, object?>)expando;
-                    foreach (var p in paramType.GetProperties())
+                    if (!pdict.ContainsKey("Now"))
+                        pdict["Now"] = Now;
+                    finalParams = parameters;
+                }
+                else
+                {
+                    // Merge in the common Now parameter if caller did not supply it.
+                    var paramType = parameters.GetType();
+                    var hasNow = paramType.GetProperties().Any(p => string.Equals(p.Name, "Now", StringComparison.OrdinalIgnoreCase));
+                    finalParams = hasNow ? parameters : new { Now, Parameters = parameters };
+                    if (!hasNow)
                     {
-                        dict[p.Name] = p.GetValue(parameters);
+                        // Build an expando with existing props + Now (reflection copy)
+                        var expando = new System.Dynamic.ExpandoObject();
+                        var dict = (IDictionary<string, object?>)expando;
+                        foreach (var p in paramType.GetProperties())
+                            dict[p.Name] = p.GetValue(parameters);
+                        dict["Now"] = Now;
+                        finalParams = expando;
                     }
-
-                    dict["Now"] = Now;
-                    finalParams = expando;
                 }
 
                 var cursor = await runner.RunAsync(query, finalParams);
@@ -451,7 +456,8 @@ namespace Neo4jLiteRepo
             await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
             try
             {
-                await MergeRelationshipAsync(fromNode.GetType().Name, fromNode.Id, rel, toNode.GetType().Name, toNode.Id, tx, ct);
+                // Use new refactored method below
+                await MergeRelationshipAsync(fromNode, rel, toNode, tx, ct);
                 await tx.CommitAsync().ConfigureAwait(false);
             }
             catch
@@ -474,68 +480,44 @@ namespace Neo4jLiteRepo
         /// </summary>
         public async Task MergeRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, IAsyncTransaction tx, CancellationToken ct = default)
         {
-            await MergeRelationshipAsync(fromNode.GetType().Name, fromNode.Id, rel, toNode.GetType().Name, toNode.Id, tx, ct);
-        }
+            //await MergeRelationshipAsync(fromNode.GetType().Name, fromNode.Id, rel, toNode.GetType().Name, toNode.Id, tx, ct);
 
-        /// <summary>
-        /// Merges (creates if missing) a relationship of type <paramref name="rel"/> from one node to another.
-        /// </summary>
-        public async Task MergeRelationshipAsync(string fromLabel, string fromId, string rel, string toLabel, string toId, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            await using var session = neo4jDriver.AsyncSession();
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                await MergeRelationshipAsync(fromLabel, fromId, rel, toLabel, toId, tx, ct).ConfigureAwait(false);
-                await tx.CommitAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                    /* ignore */
-                }
-
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Merges (creates if missing) a relationship of type <paramref name="rel"/> from one node to another.
-        /// </summary>
-        public async Task MergeRelationshipAsync(string fromLabel, string fromId, string rel, string toLabel, string toId, IAsyncTransaction tx, CancellationToken ct = default)
-        {
             if (tx == null) throw new ArgumentNullException(nameof(tx));
             ct.ThrowIfCancellationRequested();
-            ValidateLabel(fromLabel, nameof(fromLabel));
-            ValidateLabel(toLabel, nameof(toLabel));
             ValidateRel(rel, nameof(rel));
-            if (string.IsNullOrWhiteSpace(fromId)) throw new ArgumentException("fromId required", nameof(fromId));
-            if (string.IsNullOrWhiteSpace(toId)) throw new ArgumentException("toId required", nameof(toId));
+            var fromPkValue = fromNode.GetPrimaryKeyValue();
+            var toPkValue = toNode.GetPrimaryKeyValue();
+            var fromPkName = fromNode.GetPrimaryKeyName();
+            var toPkName = toNode.GetPrimaryKeyName();
+
+            if (string.IsNullOrWhiteSpace(fromPkValue)) throw new ArgumentException($"{fromPkName} required", fromPkName);
+            if (string.IsNullOrWhiteSpace(toPkValue)) throw new ArgumentException($"{toPkName} required", toPkName);
 
             var cypher = $$"""
-                           MATCH (f:{{fromLabel}} { id: $fromId })
-                           MATCH (t:{{toLabel}} { id: $toId })
-                           MERGE (f)-[r:{{rel}}]->(t)
-                           RETURN r
-                           """; // labels & rel validated
+                MATCH (f:{{fromNode.LabelName}} { {{fromPkName}}: $fromPkValue })
+                MATCH (t:{{toNode.LabelName}} { {{toPkName}}: $toPkValue })
+                MERGE (f)-[r:{{rel}}]->(t)
+                RETURN r
+            """;
+
+            var parameters = new Dictionary<string, object>
+            {
+                { "fromPkValue", fromPkValue },
+                { "toPkValue", toPkValue }
+            };
             try
             {
-                await ExecuteWriteQuery(tx, cypher, new { fromId, toId });
-                logger.LogInformation("MERGE {FromLabel}:{FromId}-[{Rel}]->{ToLabel}:{ToId}"
-                    , fromLabel, fromId, rel, toLabel, toId);
+                await ExecuteWriteQuery(tx, cypher, parameters);
+                logger.LogInformation("MERGE {FromLabel}:{FromPkValue}-[{Rel}]->{ToLabel}:{ToPkValue}", fromNode.LabelName, fromPkValue, rel, toNode.LabelName, toPkValue);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "Failed merging relationship {Rel} {FromLabel}:{FromId}->{ToLabel}:{ToId}", rel, fromLabel, fromId, toLabel, toId);
+                logger.LogError(ex, "Failed merging relationship {Rel} {FromLabel}:{FromPkValue}->{ToLabel}:{ToPkValue}", rel, fromNode.LabelName, fromPkValue, toNode.LabelName, toPkValue);
                 throw;
             }
         }
+
+
 
 
         /// <summary>
@@ -543,7 +525,7 @@ namespace Neo4jLiteRepo
         /// </summary>
         public async Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, RelationshipDirection direction, IAsyncTransaction tx, CancellationToken ct = default)
         {
-            await DeleteRelationshipAsync(fromNode.GetType().Name, fromNode.Id, rel, toNode.GetType().Name, toNode.Id, direction, tx, ct);
+            await DeleteRelationshipAsync(fromNode.GetType().Name, fromNode.GetPrimaryKeyValue()!, rel, toNode.GetType().Name, toNode.GetPrimaryKeyValue()!, direction, tx, ct);
         }
 
         /// <summary>
@@ -835,7 +817,7 @@ namespace Neo4jLiteRepo
         {
             ct.ThrowIfCancellationRequested();
             var cypher = BuildUpsertNodeQuery(node);
-            logger.LogInformation("upsert ({label}:{id})", node.LabelName, node.Id);
+            logger.LogInformation("upsert ({label}:{pk})", node.LabelName, node.GetPrimaryKeyValue());
             var cursor = await tx.RunAsync(cypher.Query, cypher.Parameters);
             return await cursor.ConsumeAsync();
         }
@@ -902,7 +884,7 @@ namespace Neo4jLiteRepo
             // Build parameterized Cypher query and parameter map
             var parameters = new Dictionary<string, object?>
             {
-                ["id"] = node.Id,
+                [node.GetPrimaryKeyName()] = node.GetPrimaryKeyValue(),
                 ["displayName"] = node.DisplayName,
                 ["now"] = DateTimeOffset.UtcNow,
                 ["upserted"] = DateTimeOffset.UtcNow
@@ -910,7 +892,7 @@ namespace Neo4jLiteRepo
 
             var setClauses = new List<string>
             {
-                "n.id = $id",
+                $"n.{node.GetPrimaryKeyName()} = ${node.GetPrimaryKeyName()}",
                 $"n.{node.NodeDisplayNameProperty} = $displayName"
             };
 
@@ -977,7 +959,7 @@ namespace Neo4jLiteRepo
                     if (!string.IsNullOrWhiteSpace(propertyName))
                     {
                         var paramKey = string.IsNullOrEmpty(prefix) ? propertyName : $"{prefix}_{propertyName}";
-                        parameters[paramKey] = value ?? DBNull.Value;
+                        parameters[paramKey] = value ?? null;
                         setClauses.Add($"n.{propertyName} = ${paramKey}");
                     }
                 }
@@ -991,7 +973,13 @@ namespace Neo4jLiteRepo
                           SET
                             {{string.Join(",\n  ", setClauses)}}
                           """;
-            return new CypherQuery(query, parameters);
+            // Cast to required non-nullable dictionary type for CypherQuery
+            var nonNullParams = new Dictionary<string, object>();
+            foreach (var kv in parameters)
+            {
+                nonNullParams[kv.Key] = kv.Value!; // values can be null in Cypher params; driver accepts boxed nulls
+            }
+            return new CypherQuery(query, nonNullParams);
         }
 
 
@@ -1045,124 +1033,90 @@ namespace Neo4jLiteRepo
                     .FirstOrDefault(attr => attr.GetType().IsGenericType && attr.GetType()
                         .GetGenericTypeDefinition() == typeof(NodeRelationshipAttribute<>));
 
+                if (relationshipAttribute == null) 
+                    continue;
+                var relatedNodeType = relationshipAttribute.GetType().GetGenericArguments()[0];
+                var relatedNodeTypeName = relatedNodeType.Name;
+                var relationshipName = relationshipAttribute.GetType().GetProperty("RelationshipName")?.GetValue(relationshipAttribute)?.ToString()?.ToUpper();
 
-                if (relationshipAttribute != null)
+                if (string.IsNullOrWhiteSpace(relationshipName))
                 {
-                    var relatedNodeType = relationshipAttribute.GetType().GetGenericArguments()[0];
-                    var relatedNodeTypeName = relatedNodeType.Name;
-                    //var relationshipType = relationshipAttribute.GetType().GetGenericArguments()[0];
-                    var relationshipName = relationshipAttribute.GetType().GetProperty("RelationshipName")?.GetValue(relationshipAttribute)?.ToString()?.ToUpper();
+                    logger.LogError("RelationshipName is null or empty {NodeType}.", nodeType.Name);
+                    return false;
+                }
+                if (string.IsNullOrWhiteSpace(relatedNodeTypeName))
+                {
+                    logger.LogError("relatedNodeType is null or empty {NodeType}.", nodeType.Name);
+                    return false;
+                }
 
-                    if (string.IsNullOrWhiteSpace(relationshipName))
+                var value = property.GetValue(fromNode);
+                if (value is IEnumerable<string> relatedNodes)
+                {
+                    // Simple relationships (string IDs)
+                    foreach (var toNodeKey in relatedNodes)
                     {
-                        logger.LogError("RelationshipName is null or empty {NodeType}.", nodeType.Name);
-                        return false;
+                        await ExecuteCreateRelationshipsAsync(fromNode, session, relatedNodeType, relationshipName, toNodeKey, relatedNodeTypeName, []);
                     }
-
-                    if (string.IsNullOrWhiteSpace(relatedNodeTypeName))
+                }
+                else if (value is System.Collections.IEnumerable edgeEnumerable)
+                {
+                    // Advanced relationships (derived from Edge)
+                    foreach (var edgeObject in edgeEnumerable)
                     {
-                        logger.LogError("relatedNodeType is null or empty {NodeType}.", nodeType.Name);
-                        return false;
-                    }
+                        // Ensure object derives from Edge (non-generic)
+                        if (edgeObject is not Edge edge)
+                            continue;
 
-                    if (property.GetValue(fromNode) is IEnumerable<string> relatedNodes)
-                    {
-                        foreach (var toNodeId in relatedNodes)
+                        var toNodeKey = edge.TargetPrimaryKey;
+                        if (string.IsNullOrWhiteSpace(toNodeKey)) 
+                            continue;
+
+                        var setClauses = new List<string>();
+                        // Build Cypher parameters and SET clause for edge properties (still need reflection to get the concrete class properties)
+                        var edgeType = edgeObject.GetType();
+                        var customProps = edgeType.GetProperties().Where(p => p.Name != "TargetPrimaryKey");
+                        var parameters = new Dictionary<string, object?>();
+                        foreach (var cp in customProps)
                         {
-                            // relatedNode string indicates which GraphNode this node relates to
-                            var toNode = dataSourceService.GetSourceNodeFor<GraphNode>(relatedNodeTypeName, toNodeId);
-                            if (toNode == null)
-                            {
-                                // Try to load the node from the graph DB if not found in memory
-                                // We need to get the primary key property name for the related node type
-                                var pkName = fromNode.GetPrimaryKeyName(); // fallback if not available for relatedNodeType
-                                if (Activator.CreateInstance(relatedNodeType) is GraphNode tempInstance)
-                                    pkName = tempInstance.GetPrimaryKeyName();
-
-                                // Properly escape curly braces in interpolated string
-                                var toNodeQuery = $"MATCH (n:{relatedNodeTypeName} {{ {pkName}: '{toNodeId}' }}) RETURN n LIMIT 1";
-
-                                // Use reflection to call ExecuteReadListAsync with the proper generic type parameter
-                                var executeMethod = typeof(Neo4jGenericRepo).GetMethod(nameof(ExecuteReadListAsync), new[] { typeof(string), typeof(string), typeof(IDictionary<string, object>) })
-                                    ?.MakeGenericMethod(relatedNodeType);
-
-                                if (executeMethod == null)
-                                {
-                                    logger.LogError("Failed to create generic method for ExecuteReadListAsync with type {relatedNodeType}", relatedNodeTypeName);
-                                    continue;
-                                } // Create empty dictionary for parameters to avoid null
-
-                                var emptyParams = new Dictionary<string, object>();
-
-                                try
-                                {
-                                    // Directly invoke and await the task
-                                    var taskObj = executeMethod.Invoke(this, [toNodeQuery, "n", emptyParams]);
-
-                                    if (taskObj is Task resultTask)
-                                    {
-                                        // Wait for the task to complete
-                                        await resultTask.ConfigureAwait(false);
-
-                                        // Get the result using reflection
-                                        var resultProperty = resultTask.GetType().GetProperty("Result");
-                                        if (resultProperty != null)
-                                        {
-                                            var queryResult = resultProperty.GetValue(resultTask);
-
-                                            // Process results if they exist
-                                            if (queryResult is IEnumerable<object> objectResults)
-                                            {
-                                                var nodeObj = objectResults.FirstOrDefault();
-                                                if (nodeObj is GraphNode graphNode)
-                                                {
-                                                    toNode = graphNode;
-                                                }
-                                            }
-                                            else if (queryResult is System.Collections.IEnumerable enumerable)
-                                            {
-                                                // Handle non-generic IEnumerable
-                                                var enumerator = enumerable.GetEnumerator();
-                                                if (enumerator.MoveNext() && enumerator.Current is GraphNode foundNode)
-                                                {
-                                                    toNode = foundNode;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    logger.LogError(ex, "Error executing query for node type {relatedNodeType}", relatedNodeTypeName);
-                                }
-
-                                if (toNode == null)
-                                {
-                                    logger.LogError("toNode is null {NodeType} {toNodeName} (not found in memory or DB)", relatedNodeTypeName, toNodeId);
-                                    continue; // skip to next related node
-                                }
-                            }
-
-                            logger.LogInformation("{from}-[{relationship}]->{to}", fromNode.DisplayName, relationshipName, toNode.DisplayName);
-
-                            var query =
-                                $$"""
-                                  MATCH (from: {{fromNode.LabelName}} {{{fromNode.GetPrimaryKeyName()}}: "{{fromNode.GetPrimaryKeyValue()}}"})
-                                  MATCH (to:   {{toNode.LabelName}} {{{toNode.GetPrimaryKeyName()}}: "{{toNode.GetPrimaryKeyValue()}}" })
-                                  MERGE (from)-[rel:{{relationshipName}}]->(to)
-                                  """;
-
-                            await ExecuteWriteQuery(session, query);
-                            // ExecuteWriteQuery now returns an IResultCursor (never "false" like previous bool impl).
-                            // MERGE will return existing relationship without incrementing counters when it already exists.
-                            // If desired we could inspect summary counters via: var summary = await result.ConsumeAsync();
-                            // For now, treat absence of exceptions as success and do not emit a misleading warning.
+                            setClauses.Add($"rel.{cp.Name} = ${cp.Name}");
+                            parameters[cp.Name] = cp.GetValue(edgeObject);
                         }
+                        var setClause = setClauses.Count > 0 ? "SET " + string.Join(", ", setClauses) : "";
+
+                        await ExecuteCreateRelationshipsAsync(fromNode, session, relatedNodeType, relationshipName, toNodeKey, 
+                            relatedNodeTypeName, parameters, setClause);
                     }
                 }
             }
-
             return true;
+        }
+
+        private async Task ExecuteCreateRelationshipsAsync<T>(T fromNode, IAsyncSession session, Type relatedNodeType, string relationshipName, 
+            string toNodeKey, string relatedNodeTypeName, Dictionary<string, object?> parameters, string setClause = "") where T : GraphNode
+        {
+            // Determine PK name for the related type (fallback to "Id" if type cannot be constructed)
+            var pkName = "Id";
+            try
+            {
+                if (Activator.CreateInstance(relatedNodeType) is GraphNode tempInstance)
+                    pkName = tempInstance.GetPrimaryKeyName();
+            }
+            catch { /* ignore and use default */ }
+
+            logger.LogInformation("{from}-[{relationship}]->{to}", fromNode.GetPrimaryKeyValue(), relationshipName, toNodeKey);
+            
+            parameters.Add("fromKey", fromNode.GetPrimaryKeyValue());
+            parameters.Add("toKey", toNodeKey);
+
+            var query =
+                $$"""
+                  MATCH (from:{{fromNode.LabelName}} {{{fromNode.GetPrimaryKeyName()}}: $fromKey})
+                  MATCH (to:{{relatedNodeTypeName}} {{{pkName}}: $toKey})
+                  MERGE (from)-[rel:{{relationshipName}}]->(to)
+                  {{setClause}}
+                  """;
+            await ExecuteWriteQuery(session, query, parameters);
         }
 
 
@@ -1227,7 +1181,7 @@ namespace Neo4jLiteRepo
                 logger.LogInformation("CreateVectorIndexForEmbeddings completed in {ElapsedMs}ms for {LabelCount} labels", sw.ElapsedMilliseconds, labelNames.Count);
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 // catch and continue, will have been logged in ExecuteWriteQuery
                 return false;
@@ -1271,6 +1225,13 @@ namespace Neo4jLiteRepo
         {
             // Maintains existing API while improving memory profile (no ToListAsync full materialization) and using compiled mapper
             await using var session = neo4jDriver.AsyncSession();
+            return await ExecuteReadListAsync<T>(query, returnObjectKey, session, parameters);
+        }
+
+        public async Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query,
+            string returnObjectKey, IAsyncSession session, IDictionary<string, object>? parameters = null)
+            where T : class, new()
+        {
             try
             {
                 parameters ??= new Dictionary<string, object>();
@@ -1279,7 +1240,7 @@ namespace Neo4jLiteRepo
                 {
                     var cursor = await tx.RunAsync(query, parameters);
                     var list = new List<T>();
-                    bool aliasValidated = false;
+                    var aliasValidated = false;
                     var idProp = typeof(T).GetProperties()
                         .FirstOrDefault(p => string.Equals(p.Name, "Id", StringComparison.OrdinalIgnoreCase) && p.GetMethod != null);
                     HashSet<string>? seen = idProp != null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
@@ -1412,7 +1373,7 @@ namespace Neo4jLiteRepo
             Expression createObjExpr = ctor != null
                 ? Expression.New(ctor)
                 : Expression.Convert(
-                    Expression.Call(typeof(FormatterServices).GetMethod(nameof(FormatterServices.GetUninitializedObject))!, Expression.Constant(typeof(T))),
+                    Expression.Call(typeof(System.Runtime.CompilerServices.RuntimeHelpers).GetMethod("GetUninitializedObject", BindingFlags.Public | BindingFlags.Static)!, Expression.Constant(typeof(T))),
                     typeof(T));
             var assignObj = Expression.Assign(objVar, createObjExpr);
             var blockExpressions = new List<Expression> { assignObj };
@@ -2263,7 +2224,7 @@ namespace Neo4jLiteRepo
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "RemoveOrphansAsync failure Label={Label}");
+                logger.LogError(ex, "RemoveOrphansAsync failure Label={Label}", label);
                 throw new RepositoryException("Failed removing orphans.", cypher, ["label"], ex);
             }
         }

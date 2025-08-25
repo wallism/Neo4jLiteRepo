@@ -1,0 +1,14 @@
+[
+  {
+    "$type": "Neo4jLiteRepo.Sample.Nodes.Person, Neo4jLiteRepo.Sample",
+    "Name": "John Doe",
+    "BirthYear": 1980,
+    "ActedIn": [ "1" ]
+  },
+  {
+    "$type": "Neo4jLiteRepo.Sample.Nodes.Person, Neo4jLiteRepo.Sample",
+    "Name": "Jane Smith",
+    "BirthYear": 1990,
+    "ActedIn": [ "2" ]
+  }
+]

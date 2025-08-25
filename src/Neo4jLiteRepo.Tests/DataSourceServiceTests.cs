@@ -119,7 +119,7 @@ namespace Neo4jLiteRepo.Tests
 
             // Assert
             Assert.That(result, Is.Not.Null);
-            Assert.That(result.Id, Is.EqualTo("2"));
+            Assert.That(result.GetPrimaryKeyValue(), Is.EqualTo("2"));
         }
 
     }

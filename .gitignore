@@ -10,8 +10,10 @@
 *.userosscache
 *.sln.docstates
 
+volumedata*/
 TrainFromJson/
 Generated/
+*/.cr/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs

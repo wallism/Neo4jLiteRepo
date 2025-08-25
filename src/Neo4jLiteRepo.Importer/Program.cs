@@ -26,6 +26,7 @@ builder.Logging.AddSerilog(Log.Logger);
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
     .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true)
+    .AddUserSecrets(typeof(Program).Assembly)
     .AddEnvironmentVariables();
 
 // register the Neo4j driver
@@ -46,8 +47,18 @@ builder.Services.AddSingleton<IDriver>(_ =>
 builder.Services.AddSingleton<IDataRefreshPolicy, DataRefreshPolicy>();
 
 // register node services
-builder.Services.AddSingleton<INodeService, MovieNodeService>();
-builder.Services.AddSingleton<INodeService, GenreNodeService>();
+// Register all implementations of INodeService dynamically
+var nodeServiceType = typeof(INodeService);
+var assembliesToScan = new[] { typeof(MovieNodeService).Assembly };
+var nodeServiceImplementations = assembliesToScan
+    .SelectMany(assembly => assembly.GetTypes())
+    .Where(type => nodeServiceType.IsAssignableFrom(type) && !type.IsInterface && !type.IsAbstract);
+
+foreach (var implementation in nodeServiceImplementations)
+{
+    Log.Information($"Registering INodeService implementation: {implementation.Name}");
+    builder.Services.AddSingleton(nodeServiceType, implementation);
+}
 
 // register required LiteRepo services
 builder.Services.AddSingleton<INeo4jGenericRepo, Neo4jGenericRepo>();

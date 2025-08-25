@@ -6,11 +6,14 @@ namespace Neo4jLiteRepo.Sample.Nodes
     {
 
         /// <summary>
+        /// Gets or sets the unique identifier for the Genre.
+        /// </summary>
+        [NodePrimaryKey]
+        public required string Id { get; set; }
+
+        /// <summary>
         /// Name of the Genre
         /// </summary>
-        /// <remarks>Id would be a better PK, using Name for the sample for
-        /// human readability (easier to see relationships in the json)</remarks>
-        [NodePrimaryKey]
         public required string Name { get; set; }
 
         [NodeProperty(nameof(Description))]

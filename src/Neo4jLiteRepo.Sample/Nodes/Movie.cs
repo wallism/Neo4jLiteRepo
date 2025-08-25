@@ -1,12 +1,18 @@
 using Neo4jLiteRepo.Attributes;
+using Neo4jLiteRepo.Sample.Edges;
 
 namespace Neo4jLiteRepo.Sample.Nodes
 {
     public class Movie : SampleGraphNode
     {
-        public override required string Id { get; set; }
 
+        /// <summary>
+        /// Gets or sets the unique identifier for the Movie.
+        /// </summary>
         [NodePrimaryKey]
+        public required string Id { get; set; }
+
+        [NodeProperty("Title")]
         public string Title { get; set; }
 
         [NodeProperty(nameof(Released))]
@@ -19,7 +25,7 @@ namespace Neo4jLiteRepo.Sample.Nodes
         public string TestPassword { get; set; }
 
         [NodeRelationship<Genre>("IN_GENRE")]
-        public IEnumerable<string> Genres { get; set; }
+        public IEnumerable<MovieToGenre> Genres { get; set; }
 
 
         [NodeProperty("TestArray")]

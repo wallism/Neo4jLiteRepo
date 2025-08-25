@@ -67,24 +67,43 @@ builder.Services.AddSingleton<INodeService, MovieNodeService>();
   - The repository now passes the parameters dictionary directly to Cypher queries, resulting in significant performance improvements for large and complex operations. Always use parameterized queries for best results.
 - Prefer repository methods over custom Cypher unless advanced queries are needed.
 
+### Edge Modeling (`Edge` and `IEdge`)
+- The `Edge` class and `IEdge` interface represent relationships between nodes in the graph.
+- **Key Features:**
+  - `TargetPrimaryKey`: Represents the primary key of the target node in the relationship.
+- Inherit from `Edge` when your edge requires custom properties.
+
+**Example:**
+```csharp
+public class ActedIn : Edge
+{
+    public string Role { get; set; }
+}
+```
+
 ## Getting Started
 
 ### 1. Set Up Neo4j
 - **AuraDB**: [Get a free instance](https://neo4j.com/product/auradb/). Use the instance ID for `Neo4jSettings:Connection` in `appsettings.json`.
 - **Local Docker**:
 ```powershell
-$neo4jpassword = "YourPassword"
-$today = Get-Date -Format "yyyyMMdd"
+
+$now = Get-Date -Format "yyyyMMdd"
+$product = "neo4jlite"
 docker run -d --rm `
-  --name neo4j-$today `
-  -e NEO4J_AUTH=neo4j/$neo4jpassword `
-  -e NEO4J_dbms_memory_heap_initial__size=512m `
-  -e NEO4J_dbms_memory_heap_max__size=1G `
-  -v C:/Projects/YourNeo4jProject/data:/data `
+  --name neo4j-$product-$now `
+  -e server.memory.heap.initial_size=1G `
+  -e server.memory.heap.max_size=4G `
+  -e server.memory.pagecache.size=2G `
+  -v C:\Projects\yourproject\volumedata-${product}:/data `
   -p 7474:7474 `
   -p 7687:7687 `
+  --memory="7g" `
   neo4j:latest
 ```
+**make sure you have in your .gitignore:**
+
+volumedata/
 
 ### 2. Configure Your Project
 - Copy the `Neo4jLiteRepo` project into your solution (NuGet not created yet).

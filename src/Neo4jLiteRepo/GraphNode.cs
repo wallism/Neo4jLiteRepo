@@ -35,10 +35,6 @@ public abstract class GraphNode
     [JsonProperty("upserted", NullValueHandling = NullValueHandling.Ignore)]
     public DateTimeOffset Upserted { get; set; } = DateTimeOffset.Now;
 
-    /// <summary>
-    /// Unique identifier for the node
-    /// </summary>
-    public virtual string Id { get; set; }
 
 
     /// <summary>

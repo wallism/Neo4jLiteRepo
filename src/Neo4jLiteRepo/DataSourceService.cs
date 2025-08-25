@@ -106,7 +106,10 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         {
             var existing = allExisting.ToList();
             nodes.ForEach(n => {
-                if (!existing.Any(e => e.Id.Equals(n.Id)))
+                var nPk = n.GetPrimaryKeyValue();
+                if (nPk == null)
+                    return;
+                if (!existing.Any(e => e.GetPrimaryKeyValue() == nPk))
                     existing.Add(n);
             });
             allNodes[key] = existing;

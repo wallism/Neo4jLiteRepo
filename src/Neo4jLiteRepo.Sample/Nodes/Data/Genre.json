@@ -5,27 +5,27 @@
     "Name": "Animation",
     "Description": "Animated movies",
     "MySecretTest": "secretinjson",
-    "Movies": [ "Finding Nemo", "The Incredibles", "Toy Story" ]
+    "Movies": [ "2", "3", "1" ]
   },
   {
     "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "2",
     "Name": "Action",
     "Description": "Action movies",
-    "Movies": [ "The Incredibles" ]
+    "Movies": [ "3" ]
   },
   {
     "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "3",
     "Name": "Comedy",
     "Description": "Comedy movies",
-    "Movies": [ "Toy Story" ]
+    "Movies": [ "1" ]
   },
   {
     "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "4",
     "Name": "Adventure",
     "Description": "Adventure movies",
-    "Movies": [ "Finding Nemo" ]
+    "Movies": [ "2" ]
   }
 ]
