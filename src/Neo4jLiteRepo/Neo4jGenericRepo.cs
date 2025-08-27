@@ -11,6 +11,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.Serialization;
+using System.Text;
 using System.Text.RegularExpressions;
 using static Neo4jLiteRepo.Neo4jGenericRepo;
 
@@ -1038,6 +1039,9 @@ namespace Neo4jLiteRepo
                 var relatedNodeType = relationshipAttribute.GetType().GetGenericArguments()[0];
                 var relatedNodeTypeName = relatedNodeType.Name;
                 var relationshipName = relationshipAttribute.GetType().GetProperty("RelationshipName")?.GetValue(relationshipAttribute)?.ToString()?.ToUpper();
+                // seedEdgeType will only be not null when the edge has custom properties
+                var seedEdgeType = relationshipAttribute.GetType().GetProperty("SeedEdgeType")?
+                    .GetValue(relationshipAttribute) as Type;
 
                 if (string.IsNullOrWhiteSpace(relationshipName))
                 {
@@ -1051,42 +1055,78 @@ namespace Neo4jLiteRepo
                 }
 
                 var value = property.GetValue(fromNode);
-                if (value is IEnumerable<string> relatedNodes)
+                if (value is not IEnumerable<string> relatedNodeIds)
+                    continue;
+
+                // edges that have custom properties
+                List<EdgeSeed> edgeSeeds = [];
+                if (seedEdgeType != null)
                 {
-                    // Simple relationships (string IDs)
-                    foreach (var toNodeKey in relatedNodes)
+                    // Try to load edge data from DataSourceService
+                    edgeSeeds = dataSourceService.GetSourceEdgesFor<EdgeSeed>(seedEdgeType.Name).ToList();
+                    if (!edgeSeeds.Any())
                     {
-                        await ExecuteCreateRelationshipsAsync(fromNode, session, relatedNodeType, relationshipName, toNodeKey, relatedNodeTypeName, []);
+                        logger.LogWarning("EdgeSeed type {seedEdgeType} specified but no edge data found in DataSourceService.", seedEdgeType.Name);
                     }
                 }
-                else if (value is System.Collections.IEnumerable edgeEnumerable)
+
+                // Simple relationships (string IDs)
+                foreach (var toNodeKey in relatedNodeIds)
                 {
-                    // Advanced relationships (derived from Edge)
-                    foreach (var edgeObject in edgeEnumerable)
+                    // stock standard relationship with no properties on the edge
+                    if (seedEdgeType == null)
                     {
-                        // Ensure object derives from Edge (non-generic)
-                        if (edgeObject is not Edge edge)
-                            continue;
-
-                        var toNodeKey = edge.TargetPrimaryKey;
-                        if (string.IsNullOrWhiteSpace(toNodeKey)) 
-                            continue;
-
-                        var setClauses = new List<string>();
-                        // Build Cypher parameters and SET clause for edge properties (still need reflection to get the concrete class properties)
-                        var edgeType = edgeObject.GetType();
-                        var customProps = edgeType.GetProperties().Where(p => p.Name != "TargetPrimaryKey");
-                        var parameters = new Dictionary<string, object?>();
-                        foreach (var cp in customProps)
-                        {
-                            setClauses.Add($"rel.{cp.Name} = ${cp.Name}");
-                            parameters[cp.Name] = cp.GetValue(edgeObject);
-                        }
-                        var setClause = setClauses.Count > 0 ? "SET " + string.Join(", ", setClauses) : "";
-
-                        await ExecuteCreateRelationshipsAsync(fromNode, session, relatedNodeType, relationshipName, toNodeKey, 
-                            relatedNodeTypeName, parameters, setClause);
+                        await ExecuteCreateRelationshipsAsync(fromNode,
+                            session,
+                            relatedNodeType,
+                            relationshipName,
+                            toNodeKey,
+                            relatedNodeTypeName, [], string.Empty);
+                        continue;
                     }
+                        
+                    // get the edgeSeeds for this node
+                    var nodeEdgeSeeds = edgeSeeds.FindAll(seed => 
+                        seed.FromId == fromNode.GetPrimaryKeyValue()
+                        && seed.ToId == toNodeKey);
+
+                    if (!nodeEdgeSeeds.Any())
+                        continue;
+
+                    // should only be one, log if more than one
+                    if (nodeEdgeSeeds.Count > 1)
+                    {
+                        logger.LogWarning("Multiple ({count}) edge seeds found for {fromNode}-{toNode} on relationship {relationship}. Using first.",
+                            nodeEdgeSeeds.Count, fromNode.GetPrimaryKeyValue(), toNodeKey, relationshipName);
+                    }
+
+                    var matchingEdge = nodeEdgeSeeds.First();
+
+                    var edgeParameters = new Dictionary<string, object?>();
+                    // create setClause and parameters for edge properties
+                    var edgeType = matchingEdge.GetType();
+                    var setClauses = new List<string>();
+                    foreach (var prop in edgeType.GetProperties())
+                    {
+                        if (prop.Name.Equals("FromId") || prop.Name.Equals("ToId"))
+                            continue; // skip these
+                        if (Attribute.IsDefined(prop, typeof(EdgePropertyIgnoreAttribute)))
+                            continue;
+                        var propValue = prop.GetValue(matchingEdge);
+                        edgeParameters[prop.Name] = propValue;
+                        setClauses.Add($"rel.{prop.Name} = ${prop.Name}");
+                    }
+
+                    var setClause = setClauses.Count > 0 
+                        ? "SET " + string.Join(", ", setClauses) 
+                        : string.Empty;
+
+                    await ExecuteCreateRelationshipsAsync(fromNode,
+                        session,
+                        relatedNodeType,
+                        relationshipName,
+                        toNodeKey,
+                        relatedNodeTypeName, edgeParameters, setClause);
                 }
             }
             return true;
@@ -1104,7 +1144,7 @@ namespace Neo4jLiteRepo
             }
             catch { /* ignore and use default */ }
 
-            logger.LogInformation("{from}-[{relationship}]->{to}", fromNode.GetPrimaryKeyValue(), relationshipName, toNodeKey);
+            logger.LogInformation("(:{node} {from})-[{relationship}]->{to}", fromNode.LabelName, fromNode.GetPrimaryKeyValue(), relationshipName, toNodeKey);
             
             parameters.Add("fromKey", fromNode.GetPrimaryKeyValue());
             parameters.Add("toKey", toNodeKey);
@@ -1535,7 +1575,8 @@ namespace Neo4jLiteRepo
             var idx = 0;
             foreach (var p in props)
             {
-                if (p.PropertyType != typeof(List<string>)) continue;
+                if (!typeof(IEnumerable<string>).IsAssignableFrom(p.PropertyType))
+                    continue;
                 var attr = p.GetCustomAttributes()
                     .FirstOrDefault(a => a.GetType().IsGenericType && a.GetType().GetGenericTypeDefinition() == typeof(NodeRelationshipAttribute<>));
                 if (attr == null) continue;

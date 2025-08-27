@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neo4jLiteRepo.Helpers;
+using Neo4jLiteRepo.Models;
 using Neo4jLiteRepo.NodeServices;
 
 namespace Neo4jLiteRepo
@@ -139,6 +140,14 @@ namespace Neo4jLiteRepo
             return true;
         }
 
+        private IEnumerable<EdgeSeed> GetSeedEdgesFor(GraphNode node, Type edgeSeedType)
+        {
+            var edges = new List<EdgeSeed>();
+
+
+
+            return edges;
+        }
 
     }
 }

@@ -5,27 +5,27 @@
     "Name": "Animation",
     "Description": "Animated movies",
     "MySecretTest": "secretinjson",
-    "Movies": [ "2", "3", "1" ]
+    "HasMovies": [ "2", "3", "1" ]
   },
   {
     "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "2",
     "Name": "Action",
     "Description": "Action movies",
-    "Movies": [ "3" ]
+    "HasMovies": [ "3" ]
   },
   {
     "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "3",
     "Name": "Comedy",
     "Description": "Comedy movies",
-    "Movies": [ "1" ]
+    "HasMovies": [ "1" ]
   },
   {
     "$type": "Neo4jLiteRepo.Sample.Nodes.Genre, Neo4jLiteRepo.Sample",
     "Id": "4",
     "Name": "Adventure",
     "Description": "Adventure movies",
-    "Movies": [ "2" ]
+    "HasMovies": [ "2" ]
   }
 ]

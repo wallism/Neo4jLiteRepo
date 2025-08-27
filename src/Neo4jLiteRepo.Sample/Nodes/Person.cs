@@ -1,13 +1,16 @@
-using Neo4jLiteRepo;
 using Neo4jLiteRepo.Attributes;
-using Neo4jLiteRepo.Models;
-using System.Collections.Generic;
 
 namespace Neo4jLiteRepo.Sample.Nodes
 {
     public class Person : GraphNode
     {
+        /// <summary>
+        /// Gets or sets the unique identifier for the Person.
+        /// </summary>
         [NodePrimaryKey]
+        public string Id { get; set; }
+
+        [NodeProperty("Name")]
         public string Name { get; set; }
 
         [NodeProperty("BirthYear")]

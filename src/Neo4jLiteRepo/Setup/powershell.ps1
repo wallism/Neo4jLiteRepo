@@ -12,13 +12,13 @@
 # -e NEO4J_AUTH=none `
 
 $now = Get-Date -Format "yyyyMMdd"
-$product = "neo4jlite"
+
 docker run -d --rm `
   --name neo4j-$product-$now `
   -e server.memory.heap.initial_size=1G `
   -e server.memory.heap.max_size=4G `
   -e server.memory.pagecache.size=2G `
-  -v C:\Projects\_Mark\Neo4jLiteRepo\volumedata-${product}:/data `
+  -v C:\Projects\_Mark\Neo4jLiteRepo\volumedata:/data `
   -p 7474:7474 `
   -p 7687:7687 `
   --memory="7g" `

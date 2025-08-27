@@ -8,24 +8,27 @@ namespace Neo4jLiteRepo.NodeServices;
 /// Simplest implementation of a FileNodeService that reads data from JSON files.
 /// </summary>
 /// <typeparam name="T"></typeparam>
-public abstract class FileNodeService<T>(IConfiguration config, 
-    IDataRefreshPolicy dataRefreshPolicy) : INodeService
+public abstract class FileNodeService<T> : INodeService
     where T : GraphNode
 {
-    public IConfiguration Config { get; } = config;
+    private readonly IDataRefreshPolicy _dataRefreshPolicy;
 
-    protected string GetFullFilePath(string? fileName = null, string extension = ".json")
+    /// <summary>
+    /// Simplest implementation of a FileNodeService that reads data from JSON files.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    protected FileNodeService(IConfiguration config, 
+        IDataRefreshPolicy dataRefreshPolicy)
     {
-        var path = $"{Path.Combine(SourceFilesRootPath, fileName ?? typeof(T).Name)}";
-        // If the path doesn't have an extension, add .json
-        if (string.IsNullOrEmpty(Path.GetExtension(path)))
-        {
-            path = Path.ChangeExtension(path, extension);
-        }
-        return path;
+        _dataRefreshPolicy = dataRefreshPolicy;
+        Config = config;
+        SourceFilesRootPath = config["Neo4jLiteRepo:JsonFilePath"] ?? Environment.CurrentDirectory;
     }
 
-    protected string SourceFilesRootPath { get; set; } = config["Neo4jLiteRepo:JsonFilePath"] ?? Environment.CurrentDirectory;
+    public IConfiguration Config { get; }
+
+
+    protected string SourceFilesRootPath { get; set; }
 
     public virtual async Task<IEnumerable<GraphNode>> LoadData(string? fileName = null)
     {
@@ -37,11 +40,11 @@ public abstract class FileNodeService<T>(IConfiguration config,
                 return await RefreshNodeData();
 
             // refresh file data if needed
-            var fullFilePath = GetFullFilePath(fileName);
-            if (!dataRefreshPolicy.AlwaysLoadFromFile
+            var fullFilePath = DataLoadHelpers.GetFullFilePath<T>(SourceFilesRootPath, fileName);
+            if (!_dataRefreshPolicy.AlwaysLoadFromFile
                 && (!File.Exists(fullFilePath)
                     || new FileInfo(fullFilePath).Length < 128
-                    || dataRefreshPolicy.ShouldRefreshNode(typeof(T).Name)))
+                    || _dataRefreshPolicy.ShouldRefreshNode(typeof(T).Name)))
             {
                 var result = await RefreshNodeData();
                 if (UseRefreshDataOnLoadData) // don't reload from the file
@@ -58,29 +61,18 @@ public abstract class FileNodeService<T>(IConfiguration config,
         }
     }
 
-    protected async Task<IList<GraphNode>?> LoadDataFromFile(string fullFilePath)
+    protected async Task<IEnumerable<GraphNode>> LoadDataFromFile(string fullFilePath)
     {
-        var fileName = Path.GetFileName(fullFilePath);
-
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"read data from file {fileName}");
-        Console.ResetColor();
-
-        if (!File.Exists(fullFilePath))
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"file {fileName} does not exist");
-            Console.ResetColor();
+        var json = await DataLoadHelpers.LoadJsonFromFile(fullFilePath);
+        if (string.IsNullOrWhiteSpace(json))
             return [];
-        }
-
-        var json = await File.ReadAllTextAsync(fullFilePath);
-        var data = JsonConvert.DeserializeObject<IList<GraphNode>>(json, new JsonSerializerSettings
+        var data = JsonConvert.DeserializeObject<IEnumerable<GraphNode>>(json, new JsonSerializerSettings
         {
             TypeNameHandling = TypeNameHandling.Auto // Ensures polymorphic deserialization
         });
-        return data;
+        return data ?? [];
     }
+
 
     /// <summary>
     /// This method is called (in LoadData) to refresh the data from the source.
@@ -126,7 +118,7 @@ public abstract class FileNodeService<T>(IConfiguration config,
                 ContractResolver = new ExcludeTypeGenerationContractResolver()
             });
 
-            var filePath = GetFullFilePath(fileName);
+            var filePath = DataLoadHelpers.GetFullFilePath<T>(SourceFilesRootPath, fileName);
 
             // If the full file path is longer than 260 characters, trim the filename while preserving the extension
             const int maxPathLength = 260;
@@ -163,6 +155,4 @@ public abstract class FileNodeService<T>(IConfiguration config,
             throw;
         }
     }
-
-
 }

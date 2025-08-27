@@ -1,7 +1,10 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neo4jLiteRepo.Helpers;
+using Neo4jLiteRepo.Models; // added for EdgeSeed
 using Neo4jLiteRepo.NodeServices;
+using Newtonsoft.Json;
+using System.Text.Json;
 
 namespace Neo4jLiteRepo;
 
@@ -24,6 +27,35 @@ public interface IDataSourceService
 
     void AddSourceNodes<T>(List<T> nodes) where T : GraphNode;
     void AddSourceNodes<T>(string key, List<T> nodes) where T : GraphNode;
+
+    // ---------------- EdgeSeed support (new) ----------------
+
+    /// <summary>
+    /// Get all edge sources currently loaded (by key).
+    /// </summary>
+    Dictionary<string, IEnumerable<EdgeSeed>> GetAllSourceEdges();
+
+    /// <summary>
+    /// Get EdgeSeed items for a specific type T (key = typeof(T).Name).
+    /// </summary>
+    IEnumerable<T> GetSourceEdgesFor<T>() where T : EdgeSeed;
+
+    /// <summary>
+    /// Get EdgeSeed items for a specific key.
+    /// </summary>
+    IEnumerable<T> GetSourceEdgesFor<T>(string key) where T : EdgeSeed;
+
+    /// <summary>
+    /// Add edges to any existing edges for the given type T (key = typeof(T).Name).
+    /// </summary>
+    void AddSourceEdges<T>(List<T> edges) where T : EdgeSeed;
+
+    /// <summary>
+    /// Add edges to any existing edges for the given key.
+    /// </summary>
+    void AddSourceEdges<T>(string key, List<T> edges) where T : EdgeSeed;
+
+    Task<bool> LoadEdgeSeedsFromFileAsync<T>(string sourceFilesRootPath) where T : EdgeSeed;
 }
 
 /// <summary>
@@ -36,9 +68,15 @@ public class DataSourceService(ILogger<DataSourceService> logger,
 {
     private Dictionary<string, IEnumerable<GraphNode>> allNodes = [];
 
+    // New: in-memory store for edges
+    private Dictionary<string, IEnumerable<EdgeSeed>> allEdges = [];
+
     public Dictionary<string, IEnumerable<GraphNode>> GetAllSourceNodes()
         => allNodes;
 
+    // New: return all edges
+    public Dictionary<string, IEnumerable<EdgeSeed>> GetAllSourceEdges()
+        => allEdges;
 
     public IEnumerable<T> GetSourceNodesFor<T>() where T : GraphNode
     {
@@ -58,6 +96,25 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         }
 
         logger.LogInformation("{key} currently not in allNodes", key);
+        return [];
+    }
+
+    // New: Get edges for a type (key = typeof(T).Name)
+    public IEnumerable<T> GetSourceEdgesFor<T>() where T : EdgeSeed
+    {
+        var key = typeof(T).Name;
+        return GetSourceEdgesFor<T>(key);
+    }
+
+    // New: Get edges for a key
+    public IEnumerable<T> GetSourceEdgesFor<T>(string key) where T : EdgeSeed
+    {
+        if (allEdges.TryGetValue(key, out var sourceEdgesFor))
+        {
+            return sourceEdgesFor.OfType<T>();
+        }
+
+        logger.LogInformation("{key} currently not in allEdges", key);
         return [];
     }
 
@@ -82,7 +139,8 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     /// Add nodes to any existing nodes for the given key.
     /// For edge cases where you need to add nodes to the data source. Normally this is done by the data loaders LoadData.
     /// </summary>
-    public void AddSourceNodes<T>(List<T> nodes) where T : GraphNode
+    public void AddSourceNodes<T>(List<T> nodes) 
+        where T : GraphNode
     {
         var key = typeof(T).Name;
         AddSourceNodes(key, nodes);
@@ -92,7 +150,8 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     /// Add nodes to any existing nodes for the given key.
     /// </summary>
     /// <remarks>won't add duplicates (matches on Id)</remarks>
-    public void AddSourceNodes<T>(string key, List<T> nodes) where T : GraphNode
+    public void AddSourceNodes<T>(string key, List<T> nodes) 
+        where T : GraphNode
     {
         if (!nodes.Any())
             return;
@@ -109,10 +168,37 @@ public class DataSourceService(ILogger<DataSourceService> logger,
                 var nPk = n.GetPrimaryKeyValue();
                 if (nPk == null)
                     return;
-                if (!existing.Any(e => e.GetPrimaryKeyValue() == nPk))
+                if (existing.All(e => e.GetPrimaryKeyValue() != nPk))
                     existing.Add(n);
             });
             allNodes[key] = existing;
+        }
+    }
+
+    // New: Add edges with key derived from type
+    public void AddSourceEdges<T>(List<T> edges) where T : EdgeSeed
+    {
+        var key = typeof(T).Name;
+        AddSourceEdges(key, edges);
+    }
+
+    // New: Add edges to any existing edges for the given key.
+    // Note: EdgeSeed has no primary key; this method appends items.
+    public void AddSourceEdges<T>(string key, List<T> edges) where T : EdgeSeed
+    {
+        if (!edges.Any())
+            return;
+
+        allEdges.TryGetValue(key, out var allExisting);
+        if (allExisting == null)
+        {
+            allEdges[key] = edges;
+        }
+        else
+        {
+            var existing = allExisting.ToList();
+            existing.AddRange(edges);
+            allEdges[key] = existing;
         }
     }
 
@@ -147,6 +233,27 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         return true;
     }
 
+    public async Task<bool> LoadEdgeSeedsFromFileAsync<T>(string sourceFilesRootPath) where T : EdgeSeed
+    {
+        var fileName = typeof(T).Name + ".json";
+        var fullFilePath = Path.Combine(sourceFilesRootPath, fileName);
+        var json = await DataLoadHelpers.LoadJsonFromFile(fullFilePath);
+
+        if (string.IsNullOrEmpty(json))
+            return false;
+
+        var loaded = JsonConvert.DeserializeObject<IEnumerable<EdgeSeed>>(json, new JsonSerializerSettings
+        {
+            TypeNameHandling = TypeNameHandling.Auto // Ensures polymorphic deserialization
+        });
+        var edgeSeeds = loaded?.OfType<T>().ToList();
+        if (edgeSeeds == null || !edgeSeeds.Any())
+            return false;
+
+        AddSourceEdges(edgeSeeds);
+        return true;
+    }
+
     private void LogDataCounts()
     {
         logger.LogInformation("GraphNode types to seed: {count}", allNodes.Count);
@@ -154,6 +261,16 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         foreach (var nodeByType in allNodes)
         {
             logger.LogInformation("{nodeType}: {count}", nodeByType.Key.PadLeft(23), nodeByType.Value.Count());
+        }
+
+        // New: also log edge counts when present
+        if (allEdges.Count > 0)
+        {
+            logger.LogInformation("EdgeSeed groups to seed: {count}", allEdges.Count);
+            foreach (var edgeByType in allEdges)
+            {
+                logger.LogInformation("{edgeType}: {count}", edgeByType.Key.PadLeft(23), edgeByType.Value.Count());
+            }
         }
     }
 }

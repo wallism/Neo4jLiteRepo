@@ -9,10 +9,12 @@ namespace Neo4jLiteRepo.Attributes;
 /// </summary>
 [AttributeUsage(AttributeTargets.Property)]
 // ReSharper disable once UnusedTypeParameter : not used within the attribute, but it is used by the GenericRepo
-public class NodeRelationshipAttribute<T>(string relationshipName) : Attribute 
+public class NodeRelationshipAttribute<T>(string relationshipName, Type? edgeSeedType = null) : Attribute 
     where T : GraphNode
 {
 
     // ReSharper disable once UnusedMember.Global : used by the GenericRepo
     public string RelationshipName { get; } = relationshipName.ToGraphRelationShipCasing();
+
+    public Type? SeedEdgeType { get; set; } = edgeSeedType;
 }

@@ -34,7 +34,7 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     
     <!-- Neo4j Driver -->
-    <PackageReference Include="Neo4j.Driver" Version="5.27.0" />
+    <PackageReference Include="Neo4j.Driver" Version="5.28.3" />
   </ItemGroup>
 
   <ItemGroup>

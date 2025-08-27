@@ -9,7 +9,6 @@ using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.Setup;
 using Neo4jLiteRepo.Sample.NodeServices;
 using Neo4jLiteRepo.NodeServices;
-using Newtonsoft.Json;
 
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
@@ -37,10 +36,25 @@ builder.Services.AddSingleton<IDriver>(_ =>
 
     var driver = GraphDatabase.Driver(
         settings.Connection, AuthTokens.Basic(
-    settings.User,
-    settings.Password));
+            settings.User,
+            "password-for-unit-testing-db-only" // todo: revert to --> //settings.Password
+    ));
 
     Log.Information("neo4j driver initialized");
+    Task.Run(() =>
+    {
+        try
+        {
+            driver.VerifyConnectivityAsync().GetAwaiter().GetResult();
+            Log.Information("neo4j connectivity verified");
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "neo4j connectivity FAILED. Exiting.");
+            Environment.Exit(1);
+        }
+
+    }).GetAwaiter().GetResult();
     return driver;
 });
 
