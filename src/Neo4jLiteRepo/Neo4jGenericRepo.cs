@@ -9,11 +9,7 @@ using Neo4jLiteRepo.NodeServices;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Reflection.Emit;
-using System.Runtime.Serialization;
-using System.Text;
 using System.Text.RegularExpressions;
-using static Neo4jLiteRepo.Neo4jGenericRepo;
 
 namespace Neo4jLiteRepo
 {
@@ -122,9 +118,13 @@ namespace Neo4jLiteRepo
 
         Task DetachDeleteNodesByIdsAsync(string label, IEnumerable<string> ids, IAsyncTransaction tx, CancellationToken ct = default);
 
-        Task DeleteRelationshipAsync(string fromLabel, string fromId, string rel, string toLabel, string toId, RelationshipDirection direction, IAsyncTransaction tx, CancellationToken ct = default);
-        Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, RelationshipDirection direction, IAsyncTransaction tx, CancellationToken ct = default);
-        Task DeleteRelationshipsOfTypeFromAsync(string label, string id, string rel, RelationshipDirection direction, IAsyncTransaction tx, CancellationToken ct = default);
+        // Delete relationship signatures mirror MergeRelationshipAsync (session-managed and tx-based),
+        // but include a required direction parameter specific to deletion semantics.
+        Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, EdgeDirection direction, CancellationToken ct = default);
+        Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, EdgeDirection direction, IAsyncTransaction tx, CancellationToken ct = default);
+
+        Task<IResultSummary> DeleteRelationshipsOfTypeFromAsync(GraphNode fromNode, string rel, EdgeDirection direction,
+            IAsyncTransaction tx, CancellationToken ct = default);
 
         /// <summary>
         /// Removes orphan nodes (nodes with zero relationships) for label derived from <typeparamref name="T"/>.
@@ -146,22 +146,6 @@ namespace Neo4jLiteRepo
         /// Uses efficient batch deletion to avoid memory spikes and query limits.
         /// </summary>
         Task<int> RemoveOrphansAsync<T>(IAsyncSession session, CancellationToken ct = default) where T : GraphNode, new();
-
-        /// <summary>
-        /// Deletes multiple relationships (single edges) in batches within an existing transaction.
-        /// </summary>
-        /// <param name="specs">Relationship delete specifications.</param>
-        /// <param name="tx">Active transaction.</param>
-        /// <param name="ct">Cancellation token.</param>
-        Task DeleteRelationshipsAsync(IEnumerable<Neo4jGenericRepo.RelationshipDeleteSpec> specs, IAsyncTransaction tx, CancellationToken ct = default);
-
-        /// <summary>
-        /// Convenience overload that creates its own session + transaction to delete multiple relationships.
-        /// </summary>
-        /// <param name="specs">Relationship delete specifications.</param>
-        /// <param name="ct">Cancellation token.</param>
-        Task DeleteRelationshipsAsync(IEnumerable<Neo4jGenericRepo.RelationshipDeleteSpec> specs, CancellationToken ct = default);
-
 
         // Optional helpers to run custom Cypher for cascade deletes (domain-specific cascades should live outside generic repo)
         Task<bool> ContentChunkHasEmbeddingAsync(string chunkId, IAsyncTransaction tx, CancellationToken ct = default);
@@ -218,9 +202,8 @@ namespace Neo4jLiteRepo
         /// <param name="tx">Optional existing transaction to participate in; when null a temporary session/read tx is created.</param>
         /// <param name="ct">Cancellation token.</param>
         /// <returns>Distinct related node id values.</returns>
-        Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4,
-            RelationshipDirection direction = RelationshipDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
-            where TSource : GraphNode, new()
+        Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
+            EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
             where TRelated : GraphNode, new();
     }
 
@@ -342,6 +325,12 @@ namespace Neo4jLiteRepo
             if (!_labelValidationRegex.IsMatch(label))
                 throw new ArgumentException($"Invalid label '{label}'. Only A-Z, a-z, 0-9 and '_' allowed.", nameof(label));
 
+            if (!IsInDetachDeleteWhitelist(label))
+            {
+                logger.LogWarning("Label {Label} is not in the whitelist for DetachDeleteNodesByIdsAsync; skipping delete operation", label);
+                return;
+            }
+
             var idList = ids?.Where(s => !string.IsNullOrWhiteSpace(s))
                 .Select(s => s.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -380,6 +369,13 @@ namespace Neo4jLiteRepo
 
             sw.Stop();
             logger.LogInformation("DeleteNodesByIdsAsync deleted {Count} nodes for label {Label} in {ElapsedMs}ms (batches of {BatchSize})", processed, label, sw.ElapsedMilliseconds, batchSize);
+        }
+
+        private bool IsInDetachDeleteWhitelist(string label)
+        {
+            // Only allow certain labels to be deleted via this method to avoid accidental mass deletes.
+            logger.LogWarning("ZERO labels defined on whitelist"); // todo: make configurable
+            return false;
         }
 
         /// <summary>
@@ -523,236 +519,121 @@ namespace Neo4jLiteRepo
 
         /// <summary>
         /// Deletes a single relationship of the specified type between two nodes (specify direction).
+        /// Session-managed overload to mirror MergeRelationshipAsync.
         /// </summary>
-        public async Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, RelationshipDirection direction, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            await DeleteRelationshipAsync(fromNode.GetType().Name, fromNode.GetPrimaryKeyValue()!, rel, toNode.GetType().Name, toNode.GetPrimaryKeyValue()!, direction, tx, ct);
-        }
-
-        /// <summary>
-        /// Deletes a single relationship of the specified type between two nodes (specify direction).
-        /// </summary>
-        public async Task DeleteRelationshipAsync(string fromLabel, string fromId, string rel, string toLabel, string toId,
-            RelationshipDirection direction, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            if (tx == null)
-                throw new ArgumentNullException(nameof(tx));
-            ct.ThrowIfCancellationRequested();
-            ValidateLabel(fromLabel, nameof(fromLabel));
-            ValidateLabel(toLabel, nameof(toLabel));
-            ValidateRel(rel, nameof(rel));
-            if (string.IsNullOrWhiteSpace(fromId)) throw new ArgumentException("fromId required", nameof(fromId));
-            if (string.IsNullOrWhiteSpace(toId)) throw new ArgumentException("toId required", nameof(toId));
-
-            var pattern = direction switch
-            {
-                RelationshipDirection.Outgoing => $"(f)-[r:{rel}]->(t)",
-                RelationshipDirection.Incoming => $"(f)<-[r:{rel}]-(t)",
-                RelationshipDirection.Both => $"(f)-[r:{rel}]-(t)",
-                _ => throw new ArgumentException($"Invalid direction: {direction}")
-            };
-
-            var cypher = $$"""
-                           MATCH (f:{{fromLabel}} { id: $fromId })
-                           MATCH (t:{{toLabel}} { id: $toId })
-                           MATCH {{pattern}}
-                           DELETE r
-                           """; // labels & rel validated
-            try
-            {
-                await ExecuteWriteQuery(tx, cypher, new { fromId, toId });
-                logger.LogInformation("Deleted relationship {Rel} {FromLabel}:{FromId} -> {ToLabel}:{ToId}", rel, fromLabel, fromId, toLabel, toId);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Failed deleting relationship {Rel} {FromLabel}:{FromId}->{ToLabel}:{ToId}", rel, fromLabel, fromId, toLabel, toId);
-                throw;
-            }
-        }
-
-        public enum RelationshipDirection
-        {
-            Outgoing,
-            Incoming,
-            Both
-        }
-
-        /// <summary>
-        /// Specification for a relationship to delete (single directed or undirected edge between two nodes).
-        /// </summary>
-        /// <param name="FromLabel">Label of the source node (validate against regex).</param>
-        /// <param name="FromId">Id (primary key value) of the source node.</param>
-        /// <param name="Rel">Relationship type.</param>
-        /// <param name="ToLabel">Label of the target node.</param>
-        /// <param name="ToId">Id (primary key value) of the target node.</param>
-        /// <param name="Direction">Direction of the relationship to match (Outgoing / Incoming / Both).</param>
-        public record RelationshipDeleteSpec(string FromLabel, string FromId, string Rel, string ToLabel, string ToId, RelationshipDirection Direction);
-
-        /// <summary>
-        /// Deletes multiple relationships (single edges) in batches. Each spec identifies a potential relationship between two nodes.
-        /// Groups by (FromLabel, ToLabel, Rel, Direction) so labels & rel type can be inlined safely (identifiers cannot be parameterized in Cypher).
-        /// </summary>
-        /// <remarks>
-        /// Similar validation & patterns as <see cref="DeleteRelationshipAsync"/> but optimized for bulk removal.
-        /// Uses UNWIND with a batch size (default 500) to avoid overwhelming memory in large deletions.
-        /// </remarks>
-        /// <param name="specs">Collection of relationship delete specifications.</param>
-        /// <param name="tx">Active transaction (required).</param>
-        /// <param name="ct">Cancellation token.</param>
-        public async Task DeleteRelationshipsAsync(IEnumerable<RelationshipDeleteSpec> specs, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            if (tx == null)
-                throw new ArgumentNullException(nameof(tx));
-            if (specs == null)
-                throw new ArgumentNullException(nameof(specs));
-
-            // Materialize and sanitize list (filter out obviously invalid entries early, while logging).
-            var list = specs
-                .Where(s => s != null)
-                .Where(s => !string.IsNullOrWhiteSpace(s.FromLabel) && !string.IsNullOrWhiteSpace(s.ToLabel)
-                                                                    && !string.IsNullOrWhiteSpace(s.Rel) && !string.IsNullOrWhiteSpace(s.FromId) && !string.IsNullOrWhiteSpace(s.ToId))
-                .Distinct()
-                .ToList();
-
-            if (list.Count == 0)
-            {
-                logger.LogInformation("DeleteRelationshipsAsync called with 0 valid specs; nothing to do");
-                return;
-            }
-
-            const int batchSize = 500; // align with node delete batching
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            var total = list.Count;
-            var processed = 0;
-
-            // Group by items that can share a single UNWIND query (labels + rel + direction must be constants in text)
-            var groups = list.GroupBy(s => new { s.FromLabel, s.ToLabel, s.Rel, s.Direction });
-
-            foreach (var group in groups)
-            {
-                ct.ThrowIfCancellationRequested();
-                // Validate identifiers once per group (throws if invalid)
-                ValidateLabel(group.Key.FromLabel, nameof(group.Key.FromLabel));
-                ValidateLabel(group.Key.ToLabel, nameof(group.Key.ToLabel));
-                ValidateRel(group.Key.Rel, nameof(group.Key.Rel));
-
-                // Determine relationship pattern fragment (same logic as single delete variant)
-                var pattern = group.Key.Direction switch
-                {
-                    RelationshipDirection.Outgoing => $"(f)-[r:{group.Key.Rel}]->(t)",
-                    RelationshipDirection.Incoming => $"(f)<-[r:{group.Key.Rel}]-(t)",
-                    RelationshipDirection.Both => $"(f)-[r:{group.Key.Rel}]-(t)",
-                    _ => throw new ArgumentException($"Invalid direction {group.Key.Direction}")
-                };
-
-                var specsInGroup = group.ToList();
-                for (var i = 0; i < specsInGroup.Count; i += batchSize)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    // NOTE: Neo4j .NET driver only supports primitive types, lists and dictionaries for parameters.
-                    // Using an anonymous type list (new { fromId, toId }) causes a ProtocolException.
-                    // Convert each pair to a Dictionary<string, object> to satisfy driver constraints.
-                    var batchPairs = specsInGroup.Skip(i).Take(batchSize)
-                        .Select(s => new Dictionary<string, object>
-                        {
-                            ["fromId"] = s.FromId.Trim(),
-                            ["toId"] = s.ToId.Trim()
-                        })
-                        .ToList();
-
-                    if (batchPairs.Count == 0)
-                        continue;
-
-                    var cypher = $$"""
-                                   UNWIND $pairs AS pair
-                                   MATCH (f:{{group.Key.FromLabel}} { id: pair.fromId })
-                                   MATCH (t:{{group.Key.ToLabel}} { id: pair.toId })
-                                   MATCH {{pattern}}
-                                   DELETE r
-                                   """; // identifiers validated
-
-                    try
-                    {
-                        await ExecuteWriteQuery(tx, cypher, new { pairs = batchPairs });
-                        processed += batchPairs.Count;
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        logger.LogError(ex,
-                            "Failed deleting relationship batch {Start}-{End} of {GroupCount} (TotalSpecs={Total}) {FromLabel}-{Rel}-{ToLabel} Direction={Direction}",
-                            i + 1, i + batchPairs.Count, specsInGroup.Count, total, group.Key.FromLabel, group.Key.Rel, group.Key.ToLabel, group.Key.Direction);
-                        throw;
-                    }
-                }
-            }
-
-            sw.Stop();
-            logger.LogInformation("DeleteRelationshipsAsync deleted up to {Processed} relationship specs in {ElapsedMs}ms (batches of {BatchSize})", processed, sw.ElapsedMilliseconds, batchSize);
-        }
-
-        /// <summary>
-        /// Convenience overload: opens its own session + transaction to delete multiple relationships.
-        /// </summary>
-        public async Task DeleteRelationshipsAsync(IEnumerable<RelationshipDeleteSpec> specs, CancellationToken ct = default)
+        public async Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, EdgeDirection direction, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             await using var session = neo4jDriver.AsyncSession();
             await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
             try
             {
-                await DeleteRelationshipsAsync(specs, tx, ct).ConfigureAwait(false);
+                await DeleteRelationshipAsync(fromNode, rel, toNode, direction, tx, ct).ConfigureAwait(false);
                 await tx.CommitAsync().ConfigureAwait(false);
             }
             catch
             {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                    /* ignore */
-                }
-
+                try { await tx.RollbackAsync().ConfigureAwait(false); }
+                catch { /* ignore */ }
                 throw;
             }
         }
 
         /// <summary>
-        /// Deletes all outgoing relationships of a given type from a specific node.
+        /// Deletes a single relationship of the specified type between two nodes (specify direction).
+        /// Transaction-based overload that mirrors the PK-based matching used by MergeRelationshipAsync.
         /// </summary>
-        /// <remarks>if unsure about direction, use RelationshipDirection.Outgoing</remarks>
-        public async Task DeleteRelationshipsOfTypeFromAsync(string label, string id, string rel,
-            RelationshipDirection direction, IAsyncTransaction tx, CancellationToken ct = default)
+        public async Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, EdgeDirection direction, IAsyncTransaction tx, CancellationToken ct = default)
         {
-            if (tx == null)
-                throw new ArgumentNullException(nameof(tx));
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
             ct.ThrowIfCancellationRequested();
-            ValidateLabel(label, nameof(label));
             ValidateRel(rel, nameof(rel));
-            if (string.IsNullOrWhiteSpace(id))
-                throw new ArgumentException("id required", nameof(id));
+
+            var fromPkValue = fromNode.GetPrimaryKeyValue();
+            var toPkValue = toNode.GetPrimaryKeyValue();
+            var fromPkName = fromNode.GetPrimaryKeyName();
+            var toPkName = toNode.GetPrimaryKeyName();
+
+            if (string.IsNullOrWhiteSpace(fromPkValue)) throw new ArgumentException($"{fromPkName} required", fromPkName);
+            if (string.IsNullOrWhiteSpace(toPkValue)) throw new ArgumentException($"{toPkName} required", toPkName);
 
             var pattern = direction switch
             {
-                RelationshipDirection.Outgoing => $"-[r:{rel}]->()",
-                RelationshipDirection.Incoming => $"<-[r:{rel}]-()",
-                RelationshipDirection.Both => $"-[r:{rel}]-",
+                EdgeDirection.Outgoing => $"(f)-[r:{rel}]->(t)",
+                EdgeDirection.Incoming => $"(f)<-[r:{rel}]-(t)",
+                EdgeDirection.Both => $"(f)-[r:{rel}]-(t)",
                 _ => throw new ArgumentException($"Invalid direction: {direction}")
             };
 
             var cypher = $$"""
-                           MATCH (n:{{label}} { id: $id }){{pattern}}
-                           DELETE r
-                           """;
+                MATCH (f:{{fromNode.LabelName}} { {{fromPkName}}: $fromPkValue })
+                MATCH (t:{{toNode.LabelName}} { {{toPkName}}: $toPkValue })
+                MATCH {{pattern}}
+                DELETE r
+            """;
+
+            var parameters = new Dictionary<string, object>
+            {
+                { "fromPkValue", fromPkValue },
+                { "toPkValue", toPkValue }
+            };
+
             try
             {
-                await ExecuteWriteQuery(tx, cypher, new { id });
-                logger.LogInformation("Deleted all {Rel} relationships from {Label}:{Id}", rel, label, id);
+                await ExecuteWriteQuery(tx, cypher, parameters);
+                logger.LogInformation("Deleted relationship {Rel} {FromLabel}:{FromPkValue} -> {ToLabel}:{ToPkValue}", rel, fromNode.LabelName, fromPkValue, toNode.LabelName, toPkValue);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "Failed deleting relationships {Rel} from {Label}:{Id}", rel, label, id);
+                logger.LogError(ex, "Failed deleting relationship {Rel} {FromLabel}:{FromPkValue}->{ToLabel}:{ToPkValue}", rel, fromNode.LabelName, fromPkValue, toNode.LabelName, toPkValue);
+                throw;
+            }
+        }
+
+        
+        /// <summary>
+        /// Deletes all outgoing relationships of a given type from a specific node.
+        /// </summary>
+        /// <remarks>if unsure about direction, use RelationshipDirection.Outgoing</remarks>
+        public async Task<IResultSummary> DeleteRelationshipsOfTypeFromAsync(GraphNode fromNode, string rel, EdgeDirection direction, 
+            IAsyncTransaction tx, CancellationToken ct = default)
+        {
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+            ct.ThrowIfCancellationRequested();
+
+            var fromPkValue = fromNode.GetPrimaryKeyValue();
+            var fromPkName = fromNode.GetPrimaryKeyName();
+
+            ValidateRel(rel, nameof(rel));
+
+            var pattern = direction switch
+            {
+                EdgeDirection.Outgoing => $"-[r:{rel}]->()",
+                EdgeDirection.Incoming => $"<-[r:{rel}]-()",
+                EdgeDirection.Both => $"-[r:{rel}]-",
+                _ => throw new ArgumentException($"Invalid direction: {direction}")
+            };
+
+            var cypher = $$"""
+                           MATCH (n:{{fromNode.LabelName}} { {{fromPkName}}: $fromPkValue }){{pattern}}
+                           DELETE r
+                           """;
+
+            var parameters = new Dictionary<string, object>
+            {
+                { "fromPkValue", fromPkValue }
+            };
+
+            try
+            {
+                var result = await ExecuteWriteQuery(tx, cypher, parameters);
+                logger.LogInformation("Deleted all ({count}) {Rel} relationships from {Label}:{Id}"
+                    , result.Counters.RelationshipsDeleted, rel, fromNode.LabelName, fromPkValue);
+                return result;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogError(ex, "Failed deleting relationships {Rel} from {Label}:{Id}", rel, fromNode.LabelName, fromPkValue);
                 throw;
             }
         }
@@ -1920,21 +1801,20 @@ namespace Neo4jLiteRepo
         /// Lightweight variant that returns only the distinct id values of related nodes rather than hydrating full node objects.
         /// Supports traversing outgoing, incoming or undirected (both) relationships.
         /// </summary>
-        public async Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4,
-            RelationshipDirection direction = RelationshipDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
-            where TSource : GraphNode, new()
+        public async Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
+            EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
             where TRelated : GraphNode, new()
         {
             ct.ThrowIfCancellationRequested();
-            if (string.IsNullOrWhiteSpace(sourceId)) throw new ArgumentException("sourceId required", nameof(sourceId));
+            if (fromNode == null) throw new ArgumentException("from node required", "fromNode");
             if (string.IsNullOrWhiteSpace(relationshipTypes)) throw new ArgumentException("relationshipTypes required", nameof(relationshipTypes));
             if (minHops < 0) throw new ArgumentOutOfRangeException(nameof(minHops), "minHops cannot be negative");
             if (maxHops < minHops) throw new ArgumentOutOfRangeException(nameof(maxHops), "maxHops must be >= minHops");
             if (maxHops > 10) throw new ArgumentOutOfRangeException(nameof(maxHops), "maxHops > 10 likely indicates an inefficient query");
 
-            var sourceTemp = new TSource();
-            var sourceLabel = sourceTemp.LabelName;
-            var sourcePk = sourceTemp.GetPrimaryKeyName();
+            var fromPkValue = fromNode.GetPrimaryKeyValue();
+            var fromPkName = fromNode.GetPrimaryKeyName();
+
             var targetTemp = new TRelated();
             var targetLabel = targetTemp.LabelName; // use LabelName to honor overrides
             var targetPk = targetTemp.GetPrimaryKeyName();
@@ -1951,17 +1831,21 @@ namespace Neo4jLiteRepo
 
             var dirPattern = direction switch
             {
-                RelationshipDirection.Outgoing => $"-[:{relPattern}*{minHops}..{maxHops}]->",
-                RelationshipDirection.Incoming => $"<-[:{relPattern}*{minHops}..{maxHops}]-",
-                RelationshipDirection.Both => $"-[:{relPattern}*{minHops}..{maxHops}]-",
+                EdgeDirection.Outgoing => $"-[:{relPattern}*{minHops}..{maxHops}]->",
+                EdgeDirection.Incoming => $"<-[:{relPattern}*{minHops}..{maxHops}]-",
+                EdgeDirection.Both => $"-[:{relPattern}*{minHops}..{maxHops}]-",
                 _ => throw new ArgumentException($"Invalid direction {direction}")
             };
 
             var query = $$"""
-                          MATCH (s:{{sourceLabel}} { {{sourcePk}}: $id }){{dirPattern}}(t:{{targetLabel}})
+                          MATCH (s:{{fromNode.LabelName}} { {{fromPkName}}: $fromPkValue }){{dirPattern}}(t:{{targetLabel}})
                           RETURN DISTINCT t.{{targetPk}} AS id
-                          """; // sourceLabel/sourcePk validated via type; rel tokens validated above
-            var parameters = new Dictionary<string, object> { { "id", sourceId } };
+                          """; // note using id alias for simplicity - this doesn't mean the property has to be 'id'
+
+            var parameters = new Dictionary<string, object>
+            {
+                { "fromPkValue", fromPkValue }
+            };
 
             async Task<IReadOnlyList<string>> ExecAsync(IAsyncQueryRunner runner)
             {
