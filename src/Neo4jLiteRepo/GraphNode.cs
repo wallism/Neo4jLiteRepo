@@ -10,15 +10,20 @@ public abstract class GraphNode
     // ReSharper disable once PublicConstructorInAbstractClass
     public GraphNode() { } // required to satisfy new() constraint
 
+    // Static versions that don't require instances
+    public static string GetPrimaryKeyName<T>() where T : GraphNode, new()
+        => new T().GetPrimaryKeyName();  // Only one allocation for metadata
+
+    public static string GetLabelName<T>() where T : GraphNode, new()
+        => new T().LabelName;
+
     public override string ToString() => $"{DisplayName}";
 
     /// <summary>
     /// By default, the LabelName is the name of the implementation class
     /// </summary>
     [JsonIgnore]
-    public virtual string LabelName
-        => GetType().Name.ToPascalCase();
-
+    public virtual string LabelName => GetType().Name.ToPascalCase();
 
     /// <summary>
     /// Name of the "Display Name" property on the Node.
@@ -35,8 +40,7 @@ public abstract class GraphNode
     [JsonProperty("upserted", NullValueHandling = NullValueHandling.Ignore)]
     public DateTimeOffset Upserted { get; set; } = DateTimeOffset.Now;
 
-
-
+    
     /// <summary>
     /// Override to manipulate the name before it is used as the display name
     /// </summary>
@@ -59,7 +63,7 @@ public abstract class GraphNode
         return pkProperty.Name.ToGraphPropertyCasing();
     }
 
-    public string? GetPrimaryKeyValue()
+    public string GetPrimaryKeyValue()
     {
         var primaryKeyProperty = GetPrimaryKeyProperty();
 
@@ -67,8 +71,9 @@ public abstract class GraphNode
         if (primaryKeyValue == null)
             throw new InvalidOperationException($"The primary key property '{primaryKeyProperty.Name}' on {GetType().Name} is null.");
 
-        return primaryKeyValue.ToString();
+        return primaryKeyValue.ToString() ?? string.Empty;
     }
+    
 
     private PropertyInfo GetPrimaryKeyProperty()
     {

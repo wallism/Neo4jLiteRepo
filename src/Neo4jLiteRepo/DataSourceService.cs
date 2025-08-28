@@ -4,7 +4,6 @@ using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.Models; // added for EdgeSeed
 using Neo4jLiteRepo.NodeServices;
 using Newtonsoft.Json;
-using System.Text.Json;
 
 namespace Neo4jLiteRepo;
 
@@ -28,7 +27,7 @@ public interface IDataSourceService
     void AddSourceNodes<T>(List<T> nodes) where T : GraphNode;
     void AddSourceNodes<T>(string key, List<T> nodes) where T : GraphNode;
 
-    // ---------------- EdgeSeed support (new) ----------------
+    // ---------------- EdgeSeed support ----------------
 
     /// <summary>
     /// Get all edge sources currently loaded (by key).

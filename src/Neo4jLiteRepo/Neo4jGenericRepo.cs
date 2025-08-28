@@ -1,21 +1,31 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Neo4j.Driver;
+using Neo4j.Driver.Internal.Result;
 using Neo4jLiteRepo.Attributes;
 using Neo4jLiteRepo.Exceptions;
 using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.Models;
 using Neo4jLiteRepo.NodeServices;
+using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Text.RegularExpressions;
 
 namespace Neo4jLiteRepo
 {
     public interface INeo4jGenericRepo : IDisposable
     {
+        /// <summary>
+        /// Enforces unique constraints on the specified node services in the Neo4j database.
+        /// </summary>
         Task<bool> EnforceUniqueConstraints(IEnumerable<INodeService> nodeServices);
+
+        /// <summary>
+        /// Creates a vector index for embeddings on the specified labels with the given dimensions.
+        /// </summary>
         Task<bool> CreateVectorIndexForEmbeddings(IList<string>? labelNames = null, int dimensions = 3072);
 
 
@@ -56,13 +66,34 @@ namespace Neo4jLiteRepo
         Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes, IAsyncTransaction tx, CancellationToken ct = default) where T : GraphNode;
 
 
+        /// <summary>
+        /// Creates relationships for a collection of nodes in the Neo4j database.
+        /// </summary>
         Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode;
+
+        /// <summary>
+        /// Creates relationships for a single node in the Neo4j database.
+        /// </summary>
         Task<bool> CreateRelationshipsAsync<T>(T nodes) where T : GraphNode;
+
+        /// <summary>
+        /// Creates relationships for a node using the provided session.
+        /// </summary>
         Task<bool> CreateRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
 
+        /// <summary>
+        /// Retrieves all nodes and their relationships
+        /// </summary>
         Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync();
+
+        /// <summary>
+        /// Retrieves all nodes and their relationships using the provided session.
+        /// </summary>
         Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync(IAsyncSession session);
 
+        /// <summary>
+        /// Executes a read query and returns a list of objects of type T.
+        /// </summary>
         Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
             where T : class, new();
 
@@ -72,8 +103,14 @@ namespace Neo4jLiteRepo
         IAsyncEnumerable<T> ExecuteReadStreamAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
             where T : class, new();
 
+        /// <summary>
+        /// Executes a read query and returns a list of strings from the result.
+        /// </summary>
         Task<IEnumerable<string>> ExecuteReadListStringsAsync(string query, string returnObjectKey, IDictionary<string, object>? parameters = null);
 
+        /// <summary>
+        /// Executes a read query and returns a scalar value of type T.
+        /// </summary>
         Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null);
 
         /// <summary>
@@ -89,17 +126,56 @@ namespace Neo4jLiteRepo
             int topK = 5,
             bool includeContext = true,
             double similarityThreshold = 0.6);
-        
 
 
+
+        /// <summary>
+        /// Starts and returns a new asynchronous Neo4j session.
+        /// </summary>
         IAsyncSession StartSession();
 
+        /// <summary>
+        /// Merges a relationship between two nodes in the Neo4j database.
+        /// </summary>
         Task MergeRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, CancellationToken ct = default);
 
+        /// <summary>
+        /// Merges a relationship between two nodes using the provided transaction.
+        /// </summary>
         Task MergeRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, IAsyncTransaction tx, CancellationToken ct = default);
 
         /// <summary>
-        /// Convenience overload: deletes (DETACH DELETE) nodes by id creating its own session/transaction.
+        /// delete node - DETACH DELETE so all edges are also removed.
+        /// </summary>
+        Task<IResultSummary> DetachDeleteAsync<T>(T node, CancellationToken ct = default)
+            where T : GraphNode, new();
+        /// <summary>
+        /// delete node - DETACH DELETE so all edges are also removed.
+        /// </summary>
+        Task<IResultSummary> DetachDeleteAsync<T>(T node, IAsyncTransaction tx, CancellationToken ct = default)
+            where T : GraphNode, new();
+
+        Task<IResultSummary> DetachDeleteAsync<T>(string pkValue, IAsyncTransaction tx, CancellationToken ct = default) 
+            where T : GraphNode, new();
+        /// <summary>
+        /// delete node - DETACH DELETE so all edges are also removed.
+        /// </summary>
+        Task<IResultSummary> DetachDeleteAsync<T>(string pkValue, CancellationToken ct = default) 
+            where T : GraphNode, new();
+
+
+
+        Task<IResultSummary> DetachDeleteManyAsync<T>(List<T> nodes, CancellationToken ct = default)
+            where T : GraphNode, new();
+        Task<IResultSummary> DetachDeleteManyAsync<T>(List<T> nodes, IAsyncTransaction tx, CancellationToken ct = default)
+            where T : GraphNode, new();
+        Task<IResultSummary> DetachDeleteManyAsync<T>(List<string> ids, CancellationToken ct = default)
+            where T : GraphNode, new();
+        Task<IResultSummary> DetachDeleteManyAsync<T>(List<string> ids, IAsyncTransaction tx, CancellationToken ct = default)
+            where T : GraphNode, new();
+
+        /// <summary>
+        /// deletes (DETACH DELETE) nodes by id creating its own session/transaction.
         /// </summary>
         /// <param name="label">Node label</param>
         /// <param name="ids">Primary key values (id property)</param>
@@ -116,13 +192,31 @@ namespace Neo4jLiteRepo
         /// <param name="ct">Cancellation token</param>
         Task DetachDeleteNodesByIdsAsync(string label, IEnumerable<string> ids, IAsyncSession session, CancellationToken ct = default);
 
+        /// <summary>
+        /// Deletes nodes by id using the provided transaction, detaching all relationships.
+        /// </summary>
         Task DetachDeleteNodesByIdsAsync(string label, IEnumerable<string> ids, IAsyncTransaction tx, CancellationToken ct = default);
 
         // Delete relationship signatures mirror MergeRelationshipAsync (session-managed and tx-based),
         // but include a required direction parameter specific to deletion semantics.
+        /// <summary>
+        /// Deletes a relationship of the specified type and direction between two nodes.
+        /// </summary>
         Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, EdgeDirection direction, CancellationToken ct = default);
+
+        /// <summary>
+        /// Deletes a relationship of the specified type and direction between two nodes using the provided transaction.
+        /// </summary>
         Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, EdgeDirection direction, IAsyncTransaction tx, CancellationToken ct = default);
 
+        /// <summary>
+        /// Deletes multiple edges as specified using the provided transaction.
+        /// </summary>
+        Task DeleteEdgesAsync(IEnumerable<EdgeDeleteSpec> specs, IAsyncTransaction tx, CancellationToken ct = default);
+
+        /// <summary>
+        /// Deletes all relationships of a given type and direction from the specified node using the provided transaction.
+        /// </summary>
         Task<IResultSummary> DeleteRelationshipsOfTypeFromAsync(GraphNode fromNode, string rel, EdgeDirection direction,
             IAsyncTransaction tx, CancellationToken ct = default);
 
@@ -148,8 +242,19 @@ namespace Neo4jLiteRepo
         Task<int> RemoveOrphansAsync<T>(IAsyncSession session, CancellationToken ct = default) where T : GraphNode, new();
 
         // Optional helpers to run custom Cypher for cascade deletes (domain-specific cascades should live outside generic repo)
+        /// <summary>
+        /// Checks if the specified content chunk has an embedding vector.
+        /// </summary>
         Task<bool> ContentChunkHasEmbeddingAsync(string chunkId, IAsyncTransaction tx, CancellationToken ct = default);
+
+        /// <summary>
+        /// Updates the embedding vector and hash for the specified content chunk using the provided transaction.
+        /// </summary>
         Task UpdateChunkEmbeddingAsync(string chunkId, float[] vector, string? hash, IAsyncTransaction tx, CancellationToken ct = default);
+
+        /// <summary>
+        /// Retrieves the text and hash for the specified content chunk using the provided transaction.
+        /// </summary>
         Task<(string? Text, string? Hash)> GetChunkTextAndHashAsync(string chunkId, IAsyncTransaction tx, CancellationToken ct = default);
 
         /// <summary>
@@ -213,6 +318,7 @@ namespace Neo4jLiteRepo
         IDriver neo4jDriver,
         IDataSourceService dataSourceService) : IAsyncDisposable, INeo4jGenericRepo
     {
+        /// <inheritdoc/>
         public void Dispose()
         {
             neo4jDriver.Dispose();
@@ -220,16 +326,23 @@ namespace Neo4jLiteRepo
 
         protected string Now => DateTimeOffset.Now.ToLocalTime().ToString("O");
 
+        /// <inheritdoc/>
         public IAsyncSession StartSession()
         {
             return neo4jDriver.AsyncSession();
         }
 
+        /// <summary>
+        /// Executes a write query using the provided session.
+        /// </summary>
         private async Task<IResultSummary> ExecuteWriteQuery(IAsyncSession session, string query)
         {
             return await session.ExecuteWriteAsync(async tx => await ExecuteWriteQuery(tx, query));
         }
 
+        /// <summary>
+        /// Executes a write query using the provided query runner.
+        /// </summary>
         private async Task<IResultSummary> ExecuteWriteQuery(IAsyncQueryRunner runner, string query)
         {
             try
@@ -257,7 +370,7 @@ namespace Neo4jLiteRepo
         }
 
         /// <summary>
-        /// Parameterized variant of ExecuteWriteQuery to avoid duplicating error handling when additional parameters are required.
+        /// Executes a write query with parameters using the provided query runner.
         /// </summary>
         private async Task<IResultSummary> ExecuteWriteQuery(IAsyncQueryRunner runner, string query, object parameters)
         {
@@ -378,8 +491,168 @@ namespace Neo4jLiteRepo
             return false;
         }
 
+
+
+        public async Task<IResultSummary> DetachDeleteAsync<T>(T node, CancellationToken ct = default)
+            where T : GraphNode, new()
+        {
+            if (node == null) throw new ArgumentNullException(nameof(node));
+
+            await using var session = neo4jDriver.AsyncSession();
+            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+            try
+            {
+                var result = await DetachDeleteAsync(node, tx, ct).ConfigureAwait(false);
+                await tx.CommitAsync().ConfigureAwait(false);
+                return result;
+            }
+            catch
+            {
+                try
+                {
+                    await tx.RollbackAsync().ConfigureAwait(false);
+                }
+                catch { /* ignore */ }
+                throw;
+            }
+        }
+
+        public async Task<IResultSummary> DetachDeleteAsync<T>(T node, IAsyncTransaction tx, CancellationToken ct = default)
+            where T : GraphNode, new()
+        {
+            if (node == null) throw new ArgumentNullException(nameof(node));
+            var pkValue = node.GetPrimaryKeyValue();
+            return await DetachDeleteAsync<T>(pkValue, tx, ct);
+        }
+
+
+        public async Task<IResultSummary> DetachDeleteAsync<T>(string pkValue, CancellationToken ct = default)
+            where T : GraphNode, new()
+        {
+            await using var session = neo4jDriver.AsyncSession();
+            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+            try
+            {
+                var result = await DetachDeleteAsync<T>(pkValue, tx, ct).ConfigureAwait(false);
+                await tx.CommitAsync().ConfigureAwait(false);
+                return result;
+            }
+            catch
+            {
+                try
+                {
+                    await tx.RollbackAsync().ConfigureAwait(false);
+                }
+                catch { /* ignore */ }
+                throw;
+            }
+        }
+
+        public async Task<IResultSummary> DetachDeleteAsync<T>(string pkValue, IAsyncTransaction tx, CancellationToken ct = default) 
+            where T : GraphNode, new()
+        {
+            ct.ThrowIfCancellationRequested();
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+            if (string.IsNullOrWhiteSpace(pkValue)) throw new ArgumentException("Primary key value required", nameof(pkValue));
+
+            var pkName = GraphNode.GetPrimaryKeyName<T>();
+            var labelName = GraphNode.GetLabelName<T>();
+
+            var cypher = $$"""
+                           MATCH (n:{{labelName}} {{{pkName}}: $pkValue })
+                           DETACH DELETE n
+                           """;
+            var parameters = new Dictionary<string, object> {{ "pkValue", pkValue }};
+            try
+            {
+                return await tx.RunWriteAsync(cypher, parameters);
+            }
+            catch (Exception ex) // catch to log
+            {
+                logger.LogError(ex, "running cypher: {query}", cypher);
+                throw;
+            }
+        }
+
+
+        public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<T> nodes, CancellationToken ct = default) 
+            where T : GraphNode, new()
+        {
+            await using var session = neo4jDriver.AsyncSession();
+            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+            try
+            {
+                var result = await DetachDeleteManyAsync(nodes, tx, ct).ConfigureAwait(false);
+                await tx.CommitAsync().ConfigureAwait(false);
+                return result;
+            }
+            catch
+            {
+                try
+                {
+                    await tx.RollbackAsync().ConfigureAwait(false);
+                }
+                catch { /* ignore */ }
+                throw;
+            }
+        }
+
+        public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<T> nodes, IAsyncTransaction tx, CancellationToken ct = default)
+            where T : GraphNode, new()
+        {
+            if (nodes == null) throw new ArgumentNullException(nameof(nodes));
+            var ids = nodes.Select(n => n.GetPrimaryKeyValue()).ToList();
+            return await DetachDeleteManyAsync<T>(ids, tx, ct);
+        }
+
+        public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<string> ids, CancellationToken ct = default) 
+            where T : GraphNode, new()
+        {
+            await using var session = neo4jDriver.AsyncSession();
+            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+            try
+            {
+                var result = await DetachDeleteManyAsync<T>(ids, tx, ct).ConfigureAwait(false);
+                await tx.CommitAsync().ConfigureAwait(false);
+                return result;
+            }
+            catch
+            {
+                try
+                {
+                    await tx.RollbackAsync().ConfigureAwait(false);
+                }
+                catch { /* ignore */ }
+                throw;
+            }
+        }
+
+        public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<string> ids, IAsyncTransaction tx, CancellationToken ct = default) 
+            where T : GraphNode, new()
+        {
+            ct.ThrowIfCancellationRequested();
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+            if (ids.Count == 0) throw new ArgumentNullException(nameof(ids));
+
+            var pkName = GraphNode.GetPrimaryKeyName<T>();
+            var labelName = GraphNode.GetLabelName<T>();
+            
+            var cypher = $"""
+                          MATCH (n:{labelName})
+                          WHERE n.{pkName} IN $pkValues
+                          DETACH DELETE n
+                          """;
+
+            var parameters = new Dictionary<string, object>
+            {
+                { "pkValues", ids }
+            };
+
+            return await tx.RunWriteAsync(cypher, parameters);
+        }
+
         /// <summary>
-        /// Convenience overload that creates its own session & transaction to detach delete nodes by id.
+        /// detach delete nodes by id.creates its own session & transaction.
         /// Mirrors the pattern used by UpsertNodes convenience overloads.
         /// </summary>
         /// <param name="label">Node label</param>
@@ -590,11 +863,113 @@ namespace Neo4jLiteRepo
             }
         }
 
-        
+        /// <summary>
+        /// Deletes multiple relationships (single edges) in batches. Each spec identifies a potential relationship between two nodes.
+        /// Groups by (FromLabel, ToLabel, Rel, Direction) so labels & rel type can be inlined safely (identifiers cannot be parameterized in Cypher).
+        /// </summary>
+        /// <remarks>
+        /// Similar validation & patterns as <see cref="DeleteRelationshipAsync"/> but optimized for bulk removal.
+        /// Uses UNWIND with a batch size (default 500) to avoid overwhelming memory in large deletions.
+        /// </remarks>
+        /// <param name="specs">Collection of relationship delete specifications.</param>
+        /// <param name="tx">Active transaction (required).</param>
+        /// <param name="ct">Cancellation token.</param>
+        public async Task DeleteEdgesAsync(IEnumerable<EdgeDeleteSpec> specs, IAsyncTransaction tx, CancellationToken ct = default)
+        {
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+            if (specs == null) throw new ArgumentNullException(nameof(specs));
+
+            // Materialize and sanitize list (filter out obviously invalid entries early, while logging).
+            var list = specs
+                .Where(s => !string.IsNullOrWhiteSpace(s.Rel))
+                .Distinct()
+                .ToList();
+
+            if (list.Count == 0)
+            {
+                logger.LogInformation("DeleteEdgesAsync called with 0 valid specs; nothing to do");
+                return;
+            }
+
+            const int batchSize = 500; // align with node delete batching
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var total = list.Count;
+            var processed = 0;
+
+            // Group by items that can share a single UNWIND query (labels + rel + direction must be constants in text)
+            var groups = list.GroupBy(s => 
+                new { FromNode = s.FromNode, ToNode = s.ToNode, s.Rel, s.Direction });
+
+            foreach (var group in groups)
+            {
+                ct.ThrowIfCancellationRequested();
+                // Validate identifiers once per group (throws if invalid)
+                ValidateRel(group.Key.Rel, nameof(group.Key.Rel));
+                var specsInGroup = group.ToList();
+                if(specsInGroup.Count == 0)
+                    continue;
+
+                var sampleSpec = specsInGroup.First();
+                var fromPk = sampleSpec.FromNode.GetPrimaryKeyName();
+                var toPk = sampleSpec.ToNode.GetPrimaryKeyName();
+
+                // Determine relationship pattern fragment (same logic as single delete variant)
+                var pattern = group.Key.Direction switch
+                {
+                    EdgeDirection.Outgoing => $"(f)-[r:{group.Key.Rel}]->(t)",
+                    EdgeDirection.Incoming => $"(f)<-[r:{group.Key.Rel}]-(t)",
+                    EdgeDirection.Both => $"(f)-[r:{group.Key.Rel}]-(t)",
+                    _ => throw new ArgumentException($"Invalid direction {group.Key.Direction}")
+                };
+
+                for (var i = 0; i < specsInGroup.Count; i += batchSize)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    // NOTE: Neo4j .NET driver only supports primitive types, lists and dictionaries for parameters.
+                    // Using an anonymous type list (new { fromId, toId }) causes a ProtocolException.
+                    // Convert each pair to a Dictionary<string, object> to satisfy driver constraints.
+                    var batchPairs = specsInGroup.Skip(i).Take(batchSize)
+                        .Select(s => new Dictionary<string, object>
+                        {
+                            ["fromId"] = s.FromNode.GetPrimaryKeyValue(),
+                            ["toId"] = s.ToNode.GetPrimaryKeyValue()
+                        })
+                        .ToList();
+
+                    if (batchPairs.Count == 0)
+                        continue;
+
+                    var cypher = $$"""
+                                   UNWIND $pairs AS pair
+                                   MATCH (f:{{group.Key.FromNode.LabelName}} { {{fromPk}}: pair.fromId })
+                                   MATCH (t:{{group.Key.ToNode.LabelName}} { {{toPk}}: pair.toId })
+                                   MATCH {{pattern}}
+                                   DELETE r
+                                   """; // identifiers validated
+
+                    try
+                    {
+                        await ExecuteWriteQuery(tx, cypher, new { pairs = batchPairs });
+                        processed += batchPairs.Count;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        logger.LogError(ex,
+                            "Failed deleting relationship batch {Start}-{End} of {GroupCount} (TotalSpecs={Total}) {FromLabel}-{Rel}-{ToLabel} Direction={Direction}",
+                            i + 1, i + batchPairs.Count, specsInGroup.Count, total, group.Key.FromNode.LabelName, group.Key.Rel, group.Key.ToNode.LabelName, group.Key.Direction);
+                        throw;
+                    }
+                }
+            }
+
+            sw.Stop();
+            logger.LogInformation("DeleteRelationshipsAsync deleted up to {Processed} relationship specs in {ElapsedMs}ms (batches of {BatchSize})", processed, sw.ElapsedMilliseconds, batchSize);
+        }
+
         /// <summary>
         /// Deletes all outgoing relationships of a given type from a specific node.
         /// </summary>
-        /// <remarks>if unsure about direction, use RelationshipDirection.Outgoing</remarks>
+        /// <remarks>if unsure about direction, use EdgeDirection.Outgoing</remarks>
         public async Task<IResultSummary> DeleteRelationshipsOfTypeFromAsync(GraphNode fromNode, string rel, EdgeDirection direction, 
             IAsyncTransaction tx, CancellationToken ct = default)
         {
@@ -627,8 +1002,8 @@ namespace Neo4jLiteRepo
             try
             {
                 var result = await ExecuteWriteQuery(tx, cypher, parameters);
-                logger.LogInformation("Deleted all ({count}) {Rel} relationships from {Label}:{Id}"
-                    , result.Counters.RelationshipsDeleted, rel, fromNode.LabelName, fromPkValue);
+                if(result.Counters.RelationshipsDeleted > 0)
+                    logger.LogInformation("Deleted all ({count}) {Rel} relationships from {Label}:{Id}", result.Counters.RelationshipsDeleted, rel, fromNode.LabelName, fromPkValue);
                 return result;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -700,8 +1075,7 @@ namespace Neo4jLiteRepo
             ct.ThrowIfCancellationRequested();
             var cypher = BuildUpsertNodeQuery(node);
             logger.LogInformation("upsert ({label}:{pk})", node.LabelName, node.GetPrimaryKeyValue());
-            var cursor = await tx.RunAsync(cypher.Query, cypher.Parameters);
-            return await cursor.ConsumeAsync();
+            return await tx.RunWriteAsync(cypher.Query, cypher.Parameters);
         }
 
 
@@ -1164,7 +1538,7 @@ namespace Neo4jLiteRepo
                     var aliasValidated = false;
                     var idProp = typeof(T).GetProperties()
                         .FirstOrDefault(p => string.Equals(p.Name, "Id", StringComparison.OrdinalIgnoreCase) && p.GetMethod != null);
-                    HashSet<string>? seen = idProp != null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
+                    var seen = idProp != null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
 
                     while (await cursor.FetchAsync())
                     {
@@ -1428,8 +1802,8 @@ namespace Neo4jLiteRepo
 
                 var result = await session.ExecuteReadAsync(async tx =>
                 {
-                    var res = await tx.RunAsync(query, parameters);
-                    var scalar = (await res.SingleAsync())[0].As<T>();
+                    var cursor = await tx.RunAsync(query, parameters);
+                    var scalar = (await cursor.SingleAsync())[0].As<T>();
                     return scalar;
                 });
 
