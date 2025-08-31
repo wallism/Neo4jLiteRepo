@@ -1314,11 +1314,11 @@ namespace Neo4jLiteRepo
                     continue;
 
                 // edges that have custom properties
-                List<EdgeSeed> edgeSeeds = [];
+                List<CustomEdge> edgeSeeds = [];
                 if (seedEdgeType != null)
                 {
                     // Try to load edge data from DataSourceService
-                    edgeSeeds = dataSourceService.GetSourceEdgesFor<EdgeSeed>(seedEdgeType.Name).ToList();
+                    edgeSeeds = dataSourceService.GetSourceEdgesFor<CustomEdge>(seedEdgeType.Name).ToList();
                     if (!edgeSeeds.Any())
                     {
                         logger.LogWarning("EdgeSeed type {seedEdgeType} specified but no edge data found in DataSourceService.", seedEdgeType.Name);
@@ -1342,8 +1342,8 @@ namespace Neo4jLiteRepo
                         
                     // get the edgeSeeds for this node
                     var nodeEdgeSeeds = edgeSeeds.FindAll(seed => 
-                        seed.FromId == fromNode.GetPrimaryKeyValue()
-                        && seed.ToId == toNodeKey);
+                        seed.GetFromId() == fromNode.GetPrimaryKeyValue()
+                        && seed.GetToId() == toNodeKey);
 
                     if (!nodeEdgeSeeds.Any())
                         continue;
@@ -1818,14 +1818,12 @@ namespace Neo4jLiteRepo
 
         #region Relationship Loading Helpers
 
-        private sealed record RelationshipMeta(PropertyInfo Property, string RelationshipName, string TargetLabel, string TargetPrimaryKey, string Alias);
-
         /// <summary>
         /// Retrieves metadata for List<string> properties decorated with NodeRelationshipAttribute on a given type.
         /// </summary>
-        private static List<RelationshipMeta> GetRelationshipMetadata(Type t)
+        private static List<EdgeMeta> GetRelationshipMetadata(Type t)
         {
-            var metas = new List<RelationshipMeta>();
+            var metas = new List<EdgeMeta>();
             var props = t.GetProperties(BindingFlags.Public | BindingFlags.Instance);
             var idx = 0;
             foreach (var p in props)
@@ -1850,7 +1848,7 @@ namespace Neo4jLiteRepo
                     /* ignore */
                 }
 
-                metas.Add(new RelationshipMeta(p, relName!, targetType.Name, targetPk, $"rel{idx}"));
+                metas.Add(new EdgeMeta(p, relName!, targetType.Name, targetPk, $"rel{idx}"));
                 idx++;
             }
 
@@ -1861,23 +1859,23 @@ namespace Neo4jLiteRepo
         /// <summary>
         /// Builds a single Cypher query to load a node (or set of nodes) of the specified <paramref name="label"/>,
         /// optionally constrained by a filter object fragment (e.g. "{ id: $id }") and to aggregate the ids of any
-        /// outgoing relationships described in <paramref name="relationships"/>.
+        /// outgoing relationships described in <paramref name="edges"/>.
         /// </summary>
         /// <param name="label">The Neo4j label (type) of the node(s) being loaded.</param>
-        /// <param name="relationships">Metadata describing each List&lt;string&gt; relationship property to populate.
+        /// <param name="edges">Metadata describing each List&lt;string&gt; relationship property to populate.
         /// NOTE that the list is populated with string Id's, the related List of GraphNodes is not autopopulated intentionally</param>
         /// <param name="filterObject">An optional inline Cypher map used to further restrict the matched node(s) (already wrapped in braces).</param>
         /// <returns>A fully composed Cypher query with OPTIONAL MATCH / collect() steps and a RETURN clause containing the node alias 'n' plus one alias per relationship.</returns>
-        private static string BuildLoadQuery(string label, List<RelationshipMeta> relationships, string? filterObject)
+        private static string BuildLoadQuery(string label, List<EdgeMeta> edges, string? filterObject)
         {
             var matchFilter = string.IsNullOrWhiteSpace(filterObject) ? string.Empty : " " + filterObject.Trim();
-            return BuildLoadQuery(label, relationships, filterObject, null, null);
+            return BuildLoadQuery(label, edges, filterObject, null, null);
         }
 
         /// <summary>
         /// Overload: Builds Cypher query with optional SKIP/LIMIT for pagination.
         /// </summary>
-        private static string BuildLoadQuery(string label, List<RelationshipMeta> relationships, string? filterObject, int? skip, int? limit)
+        private static string BuildLoadQuery(string label, List<EdgeMeta> relationships, string? filterObject, int? skip, int? limit)
         {
             var matchFilter = string.IsNullOrWhiteSpace(filterObject) ? string.Empty : " " + filterObject.Trim();
             var sb = new System.Text.StringBuilder();
@@ -1891,7 +1889,7 @@ namespace Neo4jLiteRepo
                 for (var i = 0; i < relationships.Count; i++)
                 {
                     var r = relationships[i];
-                    sb.Append($"OPTIONAL MATCH (n)-[:{r.RelationshipName}]->(relNode{i}:{r.TargetLabel})\n");
+                    sb.Append($"OPTIONAL MATCH (n)-[:{r.edgeName}]->(relNode{i}:{r.TargetLabel})\n");
                     sb.Append($"WITH n, collect(DISTINCT relNode{i}.{r.TargetPrimaryKey}) AS {r.Alias}");
                     if (i > 0)
                     {
@@ -1923,7 +1921,7 @@ namespace Neo4jLiteRepo
         /// <param name="record">The Neo4j query record containing the node alias and zero or more relationship id lists.</param>
         /// <param name="entity">The instantiated domain object to populate.</param>
         /// <param name="relationships">Relationship metadata describing property, alias and target key.</param>
-        private void MapRelationshipLists<T>(IRecord record, T entity, List<RelationshipMeta> relationships) where T : GraphNode
+        private void MapRelationshipLists<T>(IRecord record, T entity, List<EdgeMeta> relationships) where T : GraphNode
         {
             foreach (var r in relationships)
             {

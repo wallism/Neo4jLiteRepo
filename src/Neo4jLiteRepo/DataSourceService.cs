@@ -32,29 +32,29 @@ public interface IDataSourceService
     /// <summary>
     /// Get all edge sources currently loaded (by key).
     /// </summary>
-    Dictionary<string, IEnumerable<EdgeSeed>> GetAllSourceEdges();
+    Dictionary<string, IEnumerable<CustomEdge>> GetAllSourceEdges();
 
     /// <summary>
     /// Get EdgeSeed items for a specific type T (key = typeof(T).Name).
     /// </summary>
-    IEnumerable<T> GetSourceEdgesFor<T>() where T : EdgeSeed;
+    IEnumerable<T> GetSourceEdgesFor<T>() where T : CustomEdge;
 
     /// <summary>
     /// Get EdgeSeed items for a specific key.
     /// </summary>
-    IEnumerable<T> GetSourceEdgesFor<T>(string key) where T : EdgeSeed;
+    IEnumerable<T> GetSourceEdgesFor<T>(string key) where T : CustomEdge;
 
     /// <summary>
     /// Add edges to any existing edges for the given type T (key = typeof(T).Name).
     /// </summary>
-    void AddSourceEdges<T>(List<T> edges) where T : EdgeSeed;
+    void AddSourceEdges<T>(List<T> edges) where T : CustomEdge;
 
     /// <summary>
     /// Add edges to any existing edges for the given key.
     /// </summary>
-    void AddSourceEdges<T>(string key, List<T> edges) where T : EdgeSeed;
+    void AddSourceEdges<T>(string key, List<T> edges) where T : CustomEdge;
 
-    Task<bool> LoadEdgeSeedsFromFileAsync<T>(string sourceFilesRootPath) where T : EdgeSeed;
+    Task<bool> LoadEdgeSeedsFromFileAsync<T>(string sourceFilesRootPath) where T : CustomEdge;
 }
 
 /// <summary>
@@ -68,13 +68,13 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     private Dictionary<string, IEnumerable<GraphNode>> allNodes = [];
 
     // New: in-memory store for edges
-    private Dictionary<string, IEnumerable<EdgeSeed>> allEdges = [];
+    private Dictionary<string, IEnumerable<CustomEdge>> allEdges = [];
 
     public Dictionary<string, IEnumerable<GraphNode>> GetAllSourceNodes()
         => allNodes;
 
     // New: return all edges
-    public Dictionary<string, IEnumerable<EdgeSeed>> GetAllSourceEdges()
+    public Dictionary<string, IEnumerable<CustomEdge>> GetAllSourceEdges()
         => allEdges;
 
     public IEnumerable<T> GetSourceNodesFor<T>() where T : GraphNode
@@ -99,14 +99,14 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     }
 
     // New: Get edges for a type (key = typeof(T).Name)
-    public IEnumerable<T> GetSourceEdgesFor<T>() where T : EdgeSeed
+    public IEnumerable<T> GetSourceEdgesFor<T>() where T : CustomEdge
     {
         var key = typeof(T).Name;
         return GetSourceEdgesFor<T>(key);
     }
 
     // New: Get edges for a key
-    public IEnumerable<T> GetSourceEdgesFor<T>(string key) where T : EdgeSeed
+    public IEnumerable<T> GetSourceEdgesFor<T>(string key) where T : CustomEdge
     {
         if (allEdges.TryGetValue(key, out var sourceEdgesFor))
         {
@@ -175,7 +175,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     }
 
     // New: Add edges with key derived from type
-    public void AddSourceEdges<T>(List<T> edges) where T : EdgeSeed
+    public void AddSourceEdges<T>(List<T> edges) where T : CustomEdge
     {
         var key = typeof(T).Name;
         AddSourceEdges(key, edges);
@@ -183,7 +183,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
 
     // New: Add edges to any existing edges for the given key.
     // Note: EdgeSeed has no primary key; this method appends items.
-    public void AddSourceEdges<T>(string key, List<T> edges) where T : EdgeSeed
+    public void AddSourceEdges<T>(string key, List<T> edges) where T : CustomEdge
     {
         if (!edges.Any())
             return;
@@ -232,7 +232,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         return true;
     }
 
-    public async Task<bool> LoadEdgeSeedsFromFileAsync<T>(string sourceFilesRootPath) where T : EdgeSeed
+    public async Task<bool> LoadEdgeSeedsFromFileAsync<T>(string sourceFilesRootPath) where T : CustomEdge
     {
         var fileName = typeof(T).Name + ".json";
         var fullFilePath = Path.Combine(sourceFilesRootPath, fileName);
@@ -241,7 +241,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         if (string.IsNullOrEmpty(json))
             return false;
 
-        var loaded = JsonConvert.DeserializeObject<IEnumerable<EdgeSeed>>(json, new JsonSerializerSettings
+        var loaded = JsonConvert.DeserializeObject<IEnumerable<CustomEdge>>(json, new JsonSerializerSettings
         {
             TypeNameHandling = TypeNameHandling.Auto // Ensures polymorphic deserialization
         });

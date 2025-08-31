@@ -33,7 +33,7 @@ namespace Neo4jLiteRepo.Sample.NodeServices
 
             // Load EdgeSeed data for Movie -> Genre relationships
             // this makes the EdgeSeeds available in the DataSourceService
-            var success = await _dataSourceService.LoadEdgeSeedsFromFileAsync<MovieGenreEdgeSeed>(SourceFilesRootPath);
+            var success = await _dataSourceService.LoadEdgeSeedsFromFileAsync<MovieGenreEdge>(SourceFilesRootPath);
             if (!success)
             {
                 Console.WriteLine("Failed to load MovieGenreEdgeSeed data.");
