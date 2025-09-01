@@ -6,6 +6,8 @@
 /// </summary>
 public class NodeRelationshipInfo
 {
+    public override string ToString() => $"{NodeType} Out:{OutgoingRelationships.Count} In:{IncomingRelationships.Count}";
+
     /// <summary>
     /// The label or type name of the node (e.g., "Movie", "Person").
     /// </summary>

@@ -169,6 +169,33 @@ namespace Neo4jLiteRepo.Tests.Integration
             Assert.That(animationEdge.SampleEdgeProperty, Is.EqualTo("toyStory-Animation"), "Toy Story should be in Animation genre.");
         }
 
+        [Test]
+        public async Task VerifyGetAllNodesAndRelationshipsAsync()
+        {
+            // Arrange
+            var session = _host.Services.GetRequiredService<IDriver>().AsyncSession();
+
+            // Act
+            var response = await _repo.GetAllNodesAndRelationshipsAsync(session);
+
+            // Assert
+            Assert.That(response, Is.Not.Null, "Response should not be null.");
+            Assert.That(response.NodeTypes, Is.Not.Empty, "Node types should not be empty.");
+
+            foreach (var nodeType in response.NodeTypes)
+            {
+                Assert.That(nodeType.NodeType, Is.Not.Null.Or.Empty, "NodeType should not be null or empty.");
+                Assert.That(nodeType.OutgoingRelationships, Is.Not.Null, "OutgoingRelationships should not be null.");
+                Assert.That(nodeType.IncomingRelationships, Is.Not.Null, "IncomingRelationships should not be null.");
+            }
+
+            // Additional assertion for nodeType "Movie"
+            var movieNode = response.NodeTypes.FirstOrDefault(n => n.NodeType == "Movie");
+            Assert.That(movieNode, Is.Not.Null, "Movie node type should exist.");
+            Assert.That(movieNode.IncomingRelationships.Count, Is.EqualTo(2), "Movie node should have exactly two incoming relationships.");
+            Assert.That(movieNode.OutgoingRelationships.Count, Is.EqualTo(1), "Movie node should have exactly one outgoing relationship.");
+        }
+
         private async Task CleanupDatabase()
         {
             var session = _driver.AsyncSession();

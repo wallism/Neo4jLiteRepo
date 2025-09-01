@@ -81,6 +81,16 @@ namespace Neo4jLiteRepo
         /// </summary>
         Task<bool> CreateRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
 
+        /// <summary>
+        /// Retrieves all nodes and their relationships
+        /// </summary>
+        Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync();
+
+        /// <summary>
+        /// Retrieves all nodes and their relationships using the provided session.
+        /// </summary>
+        Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync(IAsyncSession session);
+
 
         /// <summary>
         /// Executes a read query and returns a list of objects of type T.
@@ -2558,6 +2568,72 @@ namespace Neo4jLiteRepo
                     FOR (n:{node.LabelName})
                     REQUIRE n.{node.GetPrimaryKeyName()} IS UNIQUE
                     """;
+        }
+
+
+        public async Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync()
+        {
+            await using var session = neo4jDriver.AsyncSession();
+            return await GetAllNodesAndRelationshipsAsync(session);
+        }
+
+        /// <summary>
+        /// Get a list of the names of all node types and their relationships (in and out).
+        /// WARNING: For large graphs, materializing all nodes/relationships may cause high memory usage.
+        /// Consider streaming or paginating results if this method is used on large datasets.
+        /// </summary>
+        /// <remarks>Ensure the session is appropriately disposed of! Caller Responsibility.</remarks>
+        /// <returns>Useful if you want to feed your graph map into AI</returns>
+        public async Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync(IAsyncSession session)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            // why exclude? I pass the result into AI to help it gen cypher. If a rel exists on many NodeType's, to minimize noise (and cost) I pass this instead: 
+            // example: "GlobalOutgoingRelationships": ["IN_GROUP"]
+            var excludedOutRelationships = config.GetSection("Neo4jLiteRepo:GetNodesAndRelationships:excludedOutRelationships")
+                .Get<List<string>>() ?? [];
+            var excludedInRelationships = config.GetSection("Neo4jLiteRepo:GetNodesAndRelationships:excludedInRelationships")
+                .Get<List<string>>() ?? [];
+
+            // Create a parameters dictionary
+            var parameters = new Dictionary<string, object>
+            {
+                { "excludedOutRels", excludedOutRelationships },
+                { "excludedInRels", excludedInRelationships }
+            };
+
+            var query = await GetCypherFromFile("GetAllNodesAndRelationships.cypher", logger);
+
+            IResultCursor cursor;
+            try
+            {
+                cursor = await session.RunAsync(query, parameters);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Problem running GetNodesAndRelationships query. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters.Keys));
+                throw new RepositoryException("Get nodes and relationships failed.", query, parameters.Keys, ex);
+            }
+
+            try
+            {
+                var records = await cursor.ToListAsync();
+                var response = new NodeRelationshipsResponse
+                {
+                    QueriedAt = DateTime.UtcNow,
+                    NodeTypes = records.Select(record => new NodeRelationshipInfo
+                    {
+                        NodeType = record["NodeType"].As<string>(),
+                        OutgoingRelationships = record["OutgoingRelationships"].As<List<string>>(),
+                        IncomingRelationships = record["IncomingRelationships"].As<List<string>>()
+                    }).ToList()
+                };
+                return response;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Problem materializing records for GetNodesAndRelationships. QueryLength={QueryLength}", query.Length);
+                throw new RepositoryException("Get nodes and relationships materialization failed.", query, parameters.Keys, ex);
+            }
         }
 
         public async ValueTask DisposeAsync()
