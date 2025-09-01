@@ -144,8 +144,8 @@ namespace Neo4jLiteRepo.Tests.Integration
         {
             var toyStory = await _repo.LoadAsync<Movie>("1");
             Assert.That(toyStory, Is.Not.Null, "Toy Story should exist.");
-            Assert.That(toyStory.GenreEdges, Is.Not.Empty, "Toy Story should have genres.");
-            Assert.That(toyStory.GenreEdges.Contains("1"), "Toy Story should be in Animation genre.");
+            Assert.That(toyStory.GenreIds, Is.Not.Empty, "Toy Story should have genres.");
+            Assert.That(toyStory.GenreIds.Contains("1"), "Toy Story should be in Animation genre.");
         }
 
         [Test]
@@ -159,6 +159,15 @@ namespace Neo4jLiteRepo.Tests.Integration
         }
 
         
+        [Test]
+        public async Task TestMovieEdgePropertyLoaded()
+        {
+            var toyStory = await _repo.LoadAsync<Movie>("1", true, [Movie.Edges.InGenre]);
+            Assert.That(toyStory.InGenreEdges, Is.Not.Empty, "InGenre edges should be loaded");
+            Assert.That(toyStory.InGenreEdges.Count, Is.EqualTo(2), "Toy Story should 2 genre edges.");
+            var animationEdge = toyStory.InGenreEdges.FirstOrDefault(e => e.GetToId() == "1");
+            Assert.That(animationEdge.SampleEdgeProperty, Is.EqualTo("toyStory-Animation"), "Toy Story should be in Animation genre.");
+        }
 
         private async Task CleanupDatabase()
         {

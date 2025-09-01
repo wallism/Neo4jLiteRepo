@@ -12,7 +12,7 @@
 # -e NEO4J_AUTH=none `
 
 $now = Get-Date -Format "yyyyMMdd"
-
+$product = "literepo"
 docker run -d --rm `
   --name neo4j-$product-$now `
   -e server.memory.heap.initial_size=1G `

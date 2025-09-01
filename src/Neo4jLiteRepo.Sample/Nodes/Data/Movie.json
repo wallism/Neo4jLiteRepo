@@ -8,7 +8,7 @@
     "TestPassword": "testpasswordInJson",
     "SampleProperty": "Sample",
     "Tagline": "The adventure takes off!",
-    "GenreEdges": ["1", "3"]
+    "GenreIds": [ "1", "3" ]
   },
   {
     "$type": "Neo4jLiteRepo.Sample.Nodes.Movie, Neo4jLiteRepo.Sample",
@@ -17,7 +17,7 @@
     "Test": "test2",
     "Released": 2003,
     "Tagline": "There are 3.7 trillion fish in the ocean. They're looking for one.",
-    "GenreEdges": [ "1", "4" ],
+    "GenreIds": [ "1", "4" ],
     "TestArray": [ "justone" ]
   },
   {
@@ -26,7 +26,7 @@
     "Title": "The Incredibles",
     "Released": 2004,
     "Tagline": "No gut, no glory",
-    "GenreEdges": [ "1", "2" ],
+    "GenreIds": [ "1", "2" ],
     "TestArray": [ "one", "two", "three" ]
   }
 ]

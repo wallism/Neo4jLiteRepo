@@ -21,7 +21,7 @@
     <None Update="Nodes\Data\Movie.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Update="Nodes\Data\MovieGenreEdgeSeed.json">
+    <None Update="Nodes\Data\MovieGenreEdge.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Nodes\Data\Person.json">

@@ -81,15 +81,6 @@ namespace Neo4jLiteRepo
         /// </summary>
         Task<bool> CreateRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
 
-        /// <summary>
-        /// Retrieves all nodes and their relationships
-        /// </summary>
-        Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync();
-
-        /// <summary>
-        /// Retrieves all nodes and their relationships using the provided session.
-        /// </summary>
-        Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync(IAsyncSession session);
 
         /// <summary>
         /// Executes a read query and returns a list of objects of type T.
@@ -274,6 +265,26 @@ namespace Neo4jLiteRepo
         /// <returns>Collection (possibly empty) of loaded nodes.</returns>
         Task<IReadOnlyList<T>> LoadAllAsync<T>(CancellationToken ct = default) where T : GraphNode, new();
 
+        Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query,
+            string returnObjectKey, IAsyncSession session, IDictionary<string, object>? parameters = null)
+            where T : class, new();
+
+        Task<T?> LoadAsync<T>(string id, bool includeEdgeObjects, IEnumerable<string>? includeEdges, CancellationToken ct = default)
+            where T : GraphNode, new();
+
+        /// <summary>
+        /// Loads all nodes of a given type and populates outgoing relationship List&lt;string&gt; properties defined with <see cref="NodeRelationshipAttribute{T}"/>.
+        /// Only related node primary key values are populated (not full node objects) to keep the load lightweight.
+        /// Supports pagination via skip/take.
+        /// </summary>
+        /// <typeparam name="T">Concrete GraphNode type to load.</typeparam>
+        /// <param name="skip">Number of records to skip (for pagination).</param>
+        /// <param name="take">Maximum number of records to take (for pagination).</param>
+        /// <param name="ct">Cancellation token.</param>
+        Task<IReadOnlyList<T>> LoadAllAsync<T>(int skip, int take, CancellationToken ct = default) where T : GraphNode, new();
+
+        Task<IReadOnlyList<T>> LoadAllAsync<T>(int skip, int take, bool includeEdgeObjects, IEnumerable<string>? includeEdges, CancellationToken ct = default)
+            where T : GraphNode, new();
         /// <summary>
         /// Loads related nodes of type <typeparamref name="TRelated"/> reachable from a source node of type <typeparamref name="TSource"/>
         /// via any of the supplied relationship types within the specified hop range.
@@ -312,6 +323,7 @@ namespace Neo4jLiteRepo
             where TRelated : GraphNode, new();
     }
 
+    
     public class Neo4jGenericRepo(
         ILogger<Neo4jGenericRepo> logger,
         IConfiguration config,
@@ -1825,30 +1837,60 @@ namespace Neo4jLiteRepo
         {
             var metas = new List<EdgeMeta>();
             var props = t.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+
+            // Determine source label and pk (for FromId in pattern comprehensions)
+            var sourceLabel = t.Name;
+            var sourcePk = "id";
+            try
+            {
+                if (Activator.CreateInstance(t) is GraphNode src)
+                {
+                    sourceLabel = src.LabelName;
+                    sourcePk = src.GetPrimaryKeyName();
+                }
+            }
+            catch { /* ignore, keep defaults */ }
+
             var idx = 0;
             foreach (var p in props)
             {
                 if (!typeof(IEnumerable<string>).IsAssignableFrom(p.PropertyType))
                     continue;
+
                 var attr = p.GetCustomAttributes()
                     .FirstOrDefault(a => a.GetType().IsGenericType && a.GetType().GetGenericTypeDefinition() == typeof(NodeRelationshipAttribute<>));
                 if (attr == null) continue;
+
                 var relName = attr.GetType().GetProperty("RelationshipName")?.GetValue(attr)?.ToString();
                 if (string.IsNullOrWhiteSpace(relName))
-                    continue; // skip invalid
+                    continue;
+
                 var targetType = attr.GetType().GetGenericArguments()[0];
-                var targetPk = "id"; // default fallback
+                var targetPk = "id";
+                var edgeObjectType = attr.GetType().GetProperty("SeedEdgeType")?.GetValue(attr) as Type;
+
                 try
                 {
                     if (Activator.CreateInstance(targetType) is GraphNode gn)
                         targetPk = gn.GetPrimaryKeyName();
                 }
-                catch
-                {
-                    /* ignore */
-                }
+                catch { /* ignore */ }
 
-                metas.Add(new EdgeMeta(p, relName!, targetType.Name, targetPk, $"rel{idx}"));
+                var alias = $"edge{idx}";
+                var objAlias = $"edge{idx}_obj";
+
+                metas.Add(new EdgeMeta(
+                    Property: p,
+                    edgeName: relName!,
+                    SourceLabel: sourceLabel,
+                    SourcePrimaryKey: sourcePk,
+                    TargetLabel: targetType.Name,
+                    TargetPrimaryKey: targetPk,
+                    Alias: alias,
+                    ObjAlias: objAlias,
+                    EdgeObjectType: edgeObjectType
+                ));
+
                 idx++;
             }
 
@@ -1857,28 +1899,40 @@ namespace Neo4jLiteRepo
 
 
         /// <summary>
-        /// Builds a single Cypher query to load a node (or set of nodes) of the specified <paramref name="label"/>,
-        /// optionally constrained by a filter object fragment (e.g. "{ id: $id }") and to aggregate the ids of any
-        /// outgoing relationships described in <paramref name="edges"/>.
+        /// Builds a single Cypher query to load node(s) and aggregate id lists, with optional edge-object maps via pattern comprehensions.
         /// </summary>
-        /// <param name="label">The Neo4j label (type) of the node(s) being loaded.</param>
-        /// <param name="edges">Metadata describing each List&lt;string&gt; relationship property to populate.
-        /// NOTE that the list is populated with string Id's, the related List of GraphNodes is not autopopulated intentionally</param>
-        /// <param name="filterObject">An optional inline Cypher map used to further restrict the matched node(s) (already wrapped in braces).</param>
-        /// <returns>A fully composed Cypher query with OPTIONAL MATCH / collect() steps and a RETURN clause containing the node alias 'n' plus one alias per relationship.</returns>
-        private static string BuildLoadQuery(string label, List<EdgeMeta> edges, string? filterObject)
+        /// <param name="label">Node label</param>
+        /// <param name="sourcePkName">Source node PK name</param>
+        /// <param name="relationships">Relationship metadata</param>
+        /// <param name="filterObject">Inline "{ pk: $id }" map or null</param>
+        /// <param name="skip">Optional SKIP</param>
+        /// <param name="limit">Optional LIMIT</param>
+        /// <param name="includeEdgeObjects">If true, returns map arrays for edges that have EdgeObjectType</param>
+        /// <param name="includeEdges">Optional filter; match by property name or relationship name (case-insensitive)</param>
+        private static string BuildLoadQuery(
+            string label,
+            string sourcePkName,
+            List<EdgeMeta> relationships,
+            string? filterObject,
+            int? skip,
+            int? limit,
+            bool includeEdgeObjects = false,
+            ISet<string>? includeEdges = null)
         {
-            var matchFilter = string.IsNullOrWhiteSpace(filterObject) ? string.Empty : " " + filterObject.Trim();
-            return BuildLoadQuery(label, edges, filterObject, null, null);
-        }
+            bool IsIncluded(EdgeMeta r)
+            {
+                if (!includeEdgeObjects) return false;
+                if (r.EdgeObjectType is null) return false;
+                if (includeEdges == null || includeEdges.Count == 0) return true;
+                // Allow filtering by id-list property name OR relationship type OR target label
+                return includeEdges.Contains(r.Property.Name, StringComparer.OrdinalIgnoreCase)
+                       || includeEdges.Contains(r.edgeName, StringComparer.OrdinalIgnoreCase)
+                       || includeEdges.Contains(r.TargetLabel, StringComparer.OrdinalIgnoreCase);
+            }
 
-        /// <summary>
-        /// Overload: Builds Cypher query with optional SKIP/LIMIT for pagination.
-        /// </summary>
-        private static string BuildLoadQuery(string label, List<EdgeMeta> relationships, string? filterObject, int? skip, int? limit)
-        {
             var matchFilter = string.IsNullOrWhiteSpace(filterObject) ? string.Empty : " " + filterObject.Trim();
             var sb = new System.Text.StringBuilder();
+
             if (relationships.Count == 0)
             {
                 sb.Append($"MATCH (n:{label}{matchFilter}) RETURN n");
@@ -1886,6 +1940,8 @@ namespace Neo4jLiteRepo
             else
             {
                 sb.Append($"MATCH (n:{label}{matchFilter})\n");
+
+                // Existing id list aggregation via OPTIONAL MATCH + collect
                 for (var i = 0; i < relationships.Count; i++)
                 {
                     var r = relationships[i];
@@ -1896,31 +1952,57 @@ namespace Neo4jLiteRepo
                         var carry = string.Join(", ", relationships.Take(i).Select(m => m.Alias));
                         sb.Append(", ").Append(carry);
                     }
-
                     sb.Append('\n');
                 }
 
                 sb.Append("RETURN n");
                 foreach (var r in relationships)
                     sb.Append($", {r.Alias}");
+
+                // Pattern comprehension for edge-object maps (opt-in)
+                for (var i = 0; i < relationships.Count; i++)
+                {
+                    var r = relationships[i];
+                    if (!IsIncluded(r)) continue;
+
+                    // rel var names unique per relationship
+                    var relVar = $"rel{i}";
+                    var toVar = $"to{i}";
+                    // Provide both generic FromId/ToId and strongly named keys like MovieId/GenreId for convenience
+                    var srcIdKey = $"{r.SourceLabel}Id";
+                    var tgtIdKey = $"{r.TargetLabel}Id";
+
+                    sb.Append($", [ (n)-[{relVar}:{r.edgeName}]->({toVar}:{r.TargetLabel}) | ");
+                    sb.Append($"{relVar} {{ .*");
+                    sb.Append($", FromId: n.{sourcePkName}, ToId: {toVar}.{r.TargetPrimaryKey}");
+                    sb.Append($", {srcIdKey}: n.{sourcePkName}, {tgtIdKey}: {toVar}.{r.TargetPrimaryKey}");
+                    sb.Append(" } ] AS ").Append(r.ObjAlias);
+                }
             }
 
-            // Add SKIP/LIMIT if provided
             if (skip.HasValue)
                 sb.Append(" SKIP $skip");
             if (limit.HasValue)
                 sb.Append(" LIMIT $take");
+
             return sb.ToString();
         }
 
         /// <summary>
-        /// Maps aggregated relationship id collections (previously aliased in the Cypher RETURN clause) from a single
-        /// <see cref="IRecord"/> into the corresponding List&lt;string&gt; properties on <paramref name="entity"/>.
+        /// Back-compat wrapper (no edge objects).
         /// </summary>
-        /// <typeparam name="T">Concrete GraphNode type.</typeparam>
-        /// <param name="record">The Neo4j query record containing the node alias and zero or more relationship id lists.</param>
-        /// <param name="entity">The instantiated domain object to populate.</param>
-        /// <param name="relationships">Relationship metadata describing property, alias and target key.</param>
+        private static string BuildLoadQuery(string label, string sourcePkName, List<EdgeMeta> edges, string? filterObject)
+            => BuildLoadQuery(label, sourcePkName, edges, filterObject, null, null, false, null);
+
+        /// <summary>
+        /// Back-compat wrapper (no edge objects) with paging.
+        /// </summary>
+        private static string BuildLoadQuery(string label, string sourcePkName, List<EdgeMeta> relationships, string? filterObject, int? skip, int? limit)
+            => BuildLoadQuery(label, sourcePkName, relationships, filterObject, skip, limit, false, null);
+
+        /// <summary>
+        /// Maps aggregated relationship id collections to List<string> properties.
+        /// </summary>
         private void MapRelationshipLists<T>(IRecord record, T entity, List<EdgeMeta> relationships) where T : GraphNode
         {
             foreach (var r in relationships)
@@ -1941,85 +2023,150 @@ namespace Neo4jLiteRepo
             }
         }
 
+        /// <summary>
+        /// Hydrates CustomEdge subclasses from map arrays returned by pattern comprehensions.
+        /// </summary>
+        private void MapEdgeObjects<T>(IRecord record, T entity, List<EdgeMeta> relationships) where T : GraphNode
+        {
+            var entityType = entity!.GetType();
+
+            foreach (var r in relationships.Where(r => r.EdgeObjectType != null))
+            {
+                if (!record.Keys.Contains(r.ObjAlias)) continue;
+
+                List<object>? maps;
+                try
+                {
+                    maps = record[r.ObjAlias].As<List<object>>();
+                }
+                catch
+                {
+                    maps = null;
+                }
+                if (maps == null || maps.Count == 0) continue;
+
+                // Find destination property of type List<TEdge>
+                var edgeType = r.EdgeObjectType!;
+                var destProp = entityType
+                    .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .FirstOrDefault(p => IsListOf(p.PropertyType, edgeType));
+                if (destProp == null) continue; // no target property to assign
+
+                var listType = typeof(List<>).MakeGenericType(edgeType);
+                var list = (System.Collections.IList)Activator.CreateInstance(listType)!;
+
+                foreach (var m in maps)
+                {
+                    if (m is not IDictionary<string, object> dict) continue;
+                    var edgeObj = Activator.CreateInstance(edgeType);
+                    if (edgeObj == null) continue;
+
+                    foreach (var prop in edgeType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if (!prop.CanWrite) continue;
+                        if (Attribute.IsDefined(prop, typeof(EdgePropertyIgnoreAttribute))) continue;
+
+                        // Try exact property name match first
+                        if (TryGetCaseInsensitive(dict, prop.Name, out var val))
+                        {
+                            TryAssign(edgeObj, prop, val);
+                            continue;
+                        }
+
+                        // Fallbacks for id naming
+                        if (prop.Name.Equals($"{r.SourceLabel}Id", StringComparison.OrdinalIgnoreCase)
+                            && TryGetCaseInsensitive(dict, $"{r.SourceLabel}Id", out var fromStrong))
+                        {
+                            TryAssign(edgeObj, prop, fromStrong);
+                            continue;
+                        }
+
+                        if (prop.Name.Equals($"{r.TargetLabel}Id", StringComparison.OrdinalIgnoreCase)
+                            && TryGetCaseInsensitive(dict, $"{r.TargetLabel}Id", out var toStrong))
+                        {
+                            TryAssign(edgeObj, prop, toStrong);
+                            continue;
+                        }
+
+                        if (prop.Name.Equals("FromId", StringComparison.OrdinalIgnoreCase)
+                            && TryGetCaseInsensitive(dict, "FromId", out var fromGeneric))
+                        {
+                            TryAssign(edgeObj, prop, fromGeneric);
+                            continue;
+                        }
+
+                        if (prop.Name.Equals("ToId", StringComparison.OrdinalIgnoreCase)
+                            && TryGetCaseInsensitive(dict, "ToId", out var toGeneric))
+                        {
+                            TryAssign(edgeObj, prop, toGeneric);
+                            continue;
+                        }
+                    }
+
+                    list.Add(edgeObj);
+                }
+
+                destProp.SetValue(entity, list);
+            }
+
+            static bool TryGetCaseInsensitive(IDictionary<string, object> dict, string key, out object? value)
+            {
+                foreach (var k in dict.Keys)
+                {
+                    if (k.Equals(key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = dict[k];
+                        return true;
+                    }
+                }
+                value = null;
+                return false;
+            }
+
+            static bool IsListOf(Type candidate, Type elementType)
+            {
+                if (!candidate.IsGenericType) return false;
+                var gen = candidate.GetGenericTypeDefinition();
+                if (gen == typeof(List<>) || gen == typeof(IList<>) || gen == typeof(IEnumerable<>))
+                {
+                    var arg = candidate.GetGenericArguments()[0];
+                    return arg.IsAssignableFrom(elementType) || elementType.IsAssignableFrom(arg);
+                }
+                return false;
+            }
+
+            static void TryAssign(object target, PropertyInfo prop, object? value)
+            {
+                try
+                {
+                    if (value == null)
+                    {
+                        prop.SetValue(target, null);
+                        return;
+                    }
+
+                    var destType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+
+                    // Handle common numeric conversions (Neo4j integers come back as long)
+                    if (destType == typeof(int) && value is long l) { prop.SetValue(target, (int)l); return; }
+                    if (destType == typeof(long) && value is long ll) { prop.SetValue(target, ll); return; }
+                    if (destType == typeof(double) && value is double d) { prop.SetValue(target, d); return; }
+                    if (destType == typeof(float) && value is double fd) { prop.SetValue(target, (float)fd); return; }
+                    if (destType == typeof(bool) && value is bool b) { prop.SetValue(target, b); return; }
+                    if (destType == typeof(string)) { prop.SetValue(target, value.ToString()); return; }
+
+                    var converted = Convert.ChangeType(value, destType);
+                    prop.SetValue(target, converted);
+                }
+                catch
+                {
+                    // best-effort; ignore assignment failures
+                }
+            }
+        }
+
         #endregion
 
-        public async Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync()
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            return await GetAllNodesAndRelationshipsAsync(session);
-        }
-
-        /// <summary>
-        /// Get a list of the names of all node types and their relationships (in and out).
-        /// WARNING: For large graphs, materializing all nodes/relationships may cause high memory usage.
-        /// Consider streaming or paginating results if this method is used on large datasets.
-        /// </summary>
-        /// <remarks>Ensure the session is appropriately disposed of! Caller Responsibility.</remarks>
-        /// <returns>Useful if you want to feed your graph map into AI</returns>
-        public async Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync(IAsyncSession session)
-        {
-            if (session == null) throw new ArgumentNullException(nameof(session));
-            // why exclude? I pass the result into AI to help it gen cypher. If a rel exists on many NodeType's, to minimize noise (and cost) I pass this instead: 
-            // example: "GlobalOutgoingRelationships": ["IN_GROUP"]
-            var excludedOutRelationships = config.GetSection("Neo4jLiteRepo:GetNodesAndRelationships:excludedOutRelationships")
-                .Get<List<string>>() ?? [];
-            var excludedInRelationships = config.GetSection("Neo4jLiteRepo:GetNodesAndRelationships:excludedInRelationships")
-                .Get<List<string>>() ?? [];
-
-            // Create a parameters dictionary
-            var parameters = new Dictionary<string, object>
-            {
-                { "excludedOutRels", excludedOutRelationships },
-                { "excludedInRels", excludedInRelationships }
-            };
-
-            var query = await GetCypherFromFile("GetAllNodesAndRelationships.cypher", logger);
-
-            IResultCursor cursor;
-            try
-            {
-                cursor = await session.RunAsync(query, parameters);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Problem running GetNodesAndRelationships query. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters.Keys));
-                throw new RepositoryException("Get nodes and relationships failed.", query, parameters.Keys, ex);
-            }
-
-            try
-            {
-                var records = await cursor.ToListAsync();
-                var response = new NodeRelationshipsResponse
-                {
-                    QueriedAt = DateTime.UtcNow,
-                    NodeTypes = records.Select(record => new NodeRelationshipInfo
-                    {
-                        NodeType = record["NodeType"].As<string>(),
-                        OutgoingRelationships = record["OutgoingRelationships"].As<List<string>>(),
-                        IncomingRelationships = record["IncomingRelationships"].As<List<string>>()
-                    }).ToList()
-                };
-                return response;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Problem materializing records for GetNodesAndRelationships. QueryLength={QueryLength}", query.Length);
-                throw new RepositoryException("Get nodes and relationships materialization failed.", query, parameters.Keys, ex);
-            }
-        }
-
-        /// <summary>
-        /// Loads a single node by id (using its declared primary key attribute) and populates any outgoing relationship list properties (the Id List(s), not the GraphNode list(s))
-        /// decorated with <see cref="NodeRelationshipAttribute{T}"/>. Only relationship target node ids are populated to keep the method lightweight.
-        /// </summary>
-        /// <typeparam name="T">Concrete GraphNode type to load.</typeparam>
-        /// <param name="id">Primary key value (Id) to match.</param>
-        /// <param name="ct">Cancellation token.</param>
-        /// <remarks>
-        /// For each property with NodeRelationshipAttribute the underlying Cypher pattern is:
-        /// MATCH (n:Label { pk: $id }) OPTIONAL MATCH (n)-[:REL]->(r:TargetLabel) RETURN n AS n, collect(distinct r.pk) AS rel_alias
-        /// All relationship collections are retrieved in a single query using aggregation.
-        /// </remarks>
         public async Task<T?> LoadAsync<T>(string id, CancellationToken ct = default) where T : GraphNode, new()
         {
             ct.ThrowIfCancellationRequested();
@@ -2030,7 +2177,7 @@ namespace Neo4jLiteRepo
             var pkName = temp.GetPrimaryKeyName();
 
             var relationships = GetRelationshipMetadata(typeof(T));
-            var query = BuildLoadQuery(label, relationships, $"{{ {pkName}: $id }}");
+            var query = BuildLoadQuery(label, pkName, relationships, $"{{ {pkName}: $id }}", null, null, false, null);
 
             await using var session = neo4jDriver.AsyncSession();
             try
@@ -2049,6 +2196,7 @@ namespace Neo4jLiteRepo
                 var node = record["n"].As<INode>();
                 var entity = MapNodeToObject<T>(node);
                 MapRelationshipLists(record, entity, relationships);
+                // Edge objects disabled in this overload to preserve existing behavior.
                 return entity;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -2083,10 +2231,11 @@ namespace Neo4jLiteRepo
             ct.ThrowIfCancellationRequested();
             var temp = new T();
             var label = temp.LabelName;
+            var pkName = temp.GetPrimaryKeyName();
             var relationships = GetRelationshipMetadata(typeof(T));
-            var query = BuildLoadQuery(label, relationships, null, skip, take);
 
-            // Only pass skip/take if used in the query (i.e., not default values)
+            var query = BuildLoadQuery(label, pkName, relationships, null, skip, take, false, null);
+
             var parameters = new Dictionary<string, object>();
             if (query.Contains("$skip")) parameters["skip"] = skip;
             if (query.Contains("$take")) parameters["take"] = take;
@@ -2109,6 +2258,7 @@ namespace Neo4jLiteRepo
                     var node = record["n"].As<INode>();
                     var entity = MapNodeToObject<T>(node);
                     MapRelationshipLists(record, entity, relationships);
+                    // Edge objects disabled in this overload to preserve existing behavior.
                     results.Add(entity);
                 }
 
@@ -2121,6 +2271,95 @@ namespace Neo4jLiteRepo
             }
         }
 
+        // New opt-in overloads to include edge-object loading
+        public async Task<T?> LoadAsync<T>(string id, bool includeEdgeObjects, IEnumerable<string>? includeEdges, CancellationToken ct = default)
+            where T : GraphNode, new()
+        {
+            ct.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("id required", nameof(id));
+
+            var temp = new T();
+            var label = temp.LabelName;
+            var pkName = temp.GetPrimaryKeyName();
+
+            var rels = GetRelationshipMetadata(typeof(T));
+            var includeSet = includeEdges != null ? new HashSet<string>(includeEdges, StringComparer.OrdinalIgnoreCase) : null;
+
+            var query = BuildLoadQuery(label, pkName, rels, $"{{ {pkName}: $id }}", null, null, includeEdgeObjects, includeSet);
+
+            await using var session = neo4jDriver.AsyncSession();
+            try
+            {
+                var records = await session.ExecuteReadAsync(async tx =>
+                {
+                    var cursor = await tx.RunAsync(query, new { id });
+                    return await cursor.ToListAsync(cancellationToken: ct);
+                });
+
+                if (records.Count == 0) return null;
+                var record = records[0];
+                var node = record["n"].As<INode>();
+                var entity = MapNodeToObject<T>(node);
+                MapRelationshipLists(record, entity, rels);
+                if (includeEdgeObjects)
+                    MapEdgeObjects(record, entity, rels);
+                return entity;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogError(ex, "Failed loading node {Label}:{Id}", label, id);
+                throw;
+            }
+        }
+
+        public async Task<IReadOnlyList<T>> LoadAllAsync<T>(int skip, int take, bool includeEdgeObjects, IEnumerable<string>? includeEdges, CancellationToken ct = default)
+            where T : GraphNode, new()
+        {
+            ct.ThrowIfCancellationRequested();
+            var temp = new T();
+            var label = temp.LabelName;
+            var pkName = temp.GetPrimaryKeyName();
+
+            var rels = GetRelationshipMetadata(typeof(T));
+            var includeSet = includeEdges != null ? new HashSet<string>(includeEdges, StringComparer.OrdinalIgnoreCase) : null;
+
+            var query = BuildLoadQuery(label, pkName, rels, null, skip, take, includeEdgeObjects, includeSet);
+
+            var parameters = new Dictionary<string, object>();
+            if (query.Contains("$skip")) parameters["skip"] = skip;
+            if (query.Contains("$take")) parameters["take"] = take;
+
+            await using var session = neo4jDriver.AsyncSession();
+            try
+            {
+                var records = await session.ExecuteReadAsync(async tx =>
+                {
+                    var cursor = await tx.RunAsync(query, parameters);
+                    return await cursor.ToListAsync(cancellationToken: ct);
+                });
+
+                if (records.Count == 0) return Array.Empty<T>();
+                var results = new List<T>(records.Count);
+
+                foreach (var record in records)
+                {
+                    if (!record.Keys.Contains("n")) continue;
+                    var node = record["n"].As<INode>();
+                    var entity = MapNodeToObject<T>(node);
+                    MapRelationshipLists(record, entity, rels);
+                    if (includeEdgeObjects)
+                        MapEdgeObjects(record, entity, rels);
+                    results.Add(entity);
+                }
+
+                return results;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogError(ex, "Failed loading all nodes for {Label}", label);
+                throw;
+            }
+        }
         /// <summary>
         /// Generic helper to traverse from a source node to related nodes through a set of relationship types
         /// using a variable length path and return the distinct related nodes mapped to the requested type.
@@ -2167,6 +2406,64 @@ namespace Neo4jLiteRepo
             var parameters = new Dictionary<string, object> { { "id", sourceId } };
 
             return await ExecuteReadNodeQueryAsync<TRelated>(query, parameters, "node", tx, ct);
+        }
+
+        /// <summary>
+        /// Reusable internal helper to execute a read query expected to return a single node per record
+        /// (under a specified alias) and map results to <typeparamref name="T"/> using the compiled mapper.
+        /// Distinct filtering by Id (if present) is applied client-side. Intended for lightweight list lookups.
+        /// </summary>
+        /// <typeparam name="T">Graph node type to materialize.</typeparam>
+        /// <param name="query">Cypher query text.</param>
+        /// <param name="parameters">Query parameters (nullable -> empty).</param>
+        /// <param name="returnAlias">Alias of the node in the RETURN clause (default 'node').</param>
+        /// <param name="runner">Optional existing transaction/session runner; if null a temp session is created.</param>
+        /// <param name="ct">Cancellation token.</param>
+        private async Task<IReadOnlyList<T>> ExecuteReadNodeQueryAsync<T>(string query, IDictionary<string, object>? parameters, string returnAlias, IAsyncQueryRunner? runner, CancellationToken ct)
+            where T : GraphNode
+        {
+            parameters ??= new Dictionary<string, object>();
+
+            async Task<IReadOnlyList<T>> InnerAsync(IAsyncQueryRunner r)
+            {
+                try
+                {
+                    var cursor = await r.RunAsync(query, parameters);
+                    var list = new List<T>();
+                    while (await cursor.FetchAsync())
+                    {
+                        var record = cursor.Current;
+                        if (!record.Keys.Contains(returnAlias)) continue;
+                        var node = record[returnAlias].As<INode>();
+                        var mapped = MapNodeToObject<T>(node);
+                        list.Add(mapped);
+                    }
+
+                    var idProp = typeof(T).GetProperty("Id", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                    if (idProp != null)
+                    {
+                        list = list
+                            .GroupBy(o => idProp.GetValue(o)?.ToString(), StringComparer.OrdinalIgnoreCase)
+                            .Select(g => g.First())
+                            .ToList();
+                    }
+
+                    return list;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogError(ex, "ExecuteReadNodeQueryAsync failure. Alias={Alias} QueryLength={QueryLength}", returnAlias, query.Length);
+                    throw new RepositoryException("Failed executing node list read.", query, parameters.Keys, ex);
+                }
+            }
+
+            if (runner != null)
+            {
+                return await InnerAsync(runner);
+            }
+
+            await using var session = neo4jDriver.AsyncSession();
+            return await session.ExecuteReadAsync(async tx => await InnerAsync(tx));
         }
 
         /// <summary>
@@ -2248,64 +2545,6 @@ namespace Neo4jLiteRepo
 
             await using var session = neo4jDriver.AsyncSession();
             return await session.ExecuteReadAsync(async rtx => await ExecAsync(rtx));
-        }
-
-        /// <summary>
-        /// Reusable internal helper to execute a read query expected to return a single node per record
-        /// (under a specified alias) and map results to <typeparamref name="T"/> using the compiled mapper.
-        /// Distinct filtering by Id (if present) is applied client-side. Intended for lightweight list lookups.
-        /// </summary>
-        /// <typeparam name="T">Graph node type to materialize.</typeparam>
-        /// <param name="query">Cypher query text.</param>
-        /// <param name="parameters">Query parameters (nullable -> empty).</param>
-        /// <param name="returnAlias">Alias of the node in the RETURN clause (default 'node').</param>
-        /// <param name="runner">Optional existing transaction/session runner; if null a temp session is created.</param>
-        /// <param name="ct">Cancellation token.</param>
-        private async Task<IReadOnlyList<T>> ExecuteReadNodeQueryAsync<T>(string query, IDictionary<string, object>? parameters, string returnAlias, IAsyncQueryRunner? runner, CancellationToken ct)
-            where T : GraphNode
-        {
-            parameters ??= new Dictionary<string, object>();
-
-            async Task<IReadOnlyList<T>> InnerAsync(IAsyncQueryRunner r)
-            {
-                try
-                {
-                    var cursor = await r.RunAsync(query, parameters);
-                    var list = new List<T>();
-                    while (await cursor.FetchAsync())
-                    {
-                        var record = cursor.Current;
-                        if (!record.Keys.Contains(returnAlias)) continue;
-                        var node = record[returnAlias].As<INode>();
-                        var mapped = MapNodeToObject<T>(node);
-                        list.Add(mapped);
-                    }
-
-                    var idProp = typeof(T).GetProperty("Id", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                    if (idProp != null)
-                    {
-                        list = list
-                            .GroupBy(o => idProp.GetValue(o)?.ToString(), StringComparer.OrdinalIgnoreCase)
-                            .Select(g => g.First())
-                            .ToList();
-                    }
-
-                    return list;
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    logger.LogError(ex, "ExecuteReadNodeQueryAsync failure. Alias={Alias} QueryLength={QueryLength}", returnAlias, query.Length);
-                    throw new RepositoryException("Failed executing node list read.", query, parameters.Keys, ex);
-                }
-            }
-
-            if (runner != null)
-            {
-                return await InnerAsync(runner);
-            }
-
-            await using var session = neo4jDriver.AsyncSession();
-            return await session.ExecuteReadAsync(async tx => await InnerAsync(tx));
         }
 
         /// <summary>
@@ -2521,7 +2760,7 @@ namespace Neo4jLiteRepo
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "RemoveOrphansAsync failure Label={Label}", label);
+                logger.LogError(ex, "RemoveOrphansAsync failure. QueryLength={QueryLength}", cypher.Length);
                 throw new RepositoryException("Failed removing orphans.", cypher, ["label"], ex);
             }
         }

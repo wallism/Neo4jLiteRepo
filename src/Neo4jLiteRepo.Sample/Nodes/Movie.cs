@@ -27,14 +27,20 @@ namespace Neo4jLiteRepo.Sample.Nodes
         [NodeProperty("TestArray")]
         public List<string> TestArray { get; set; }
 
-        [NodeRelationship<Genre>("IN_GENRE", typeof(MovieGenreEdge))]
-        public IEnumerable<string> GenreEdges { get; set; } = [];
+        [NodeRelationship<Genre>(Edges.InGenre, typeof(MovieGenreEdge))]
+        public IEnumerable<string> GenreIds { get; set; } = [];
         
-        public List<MovieGenreEdge>? Genres { get; set; }
+        public List<MovieGenreEdge>? InGenreEdges { get; set; }
         
 
         public override string BuildDisplayName() => Title;
 
         public override string GetMainContent() => $"{Title}";
+
+
+        public static class Edges
+        {
+            public const string InGenre = "IN_GENRE";
+        }
     }
 } 

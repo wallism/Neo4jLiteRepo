@@ -1,36 +1,36 @@
 ﻿[
   {
-    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdgeSeed, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdge, Neo4jLiteRepo.Sample",
     "MovieId": "1",
     "GenreId": "1",
     "SampleEdgeProperty": "toyStory-Animation"
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdgeSeed, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdge, Neo4jLiteRepo.Sample",
     "MovieId": "1",
     "GenreId": "3",
     "SampleEdgeProperty": "toyStory-Comedy"
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdgeSeed, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdge, Neo4jLiteRepo.Sample",
     "MovieId": "2",
     "GenreId": "1",
     "SampleEdgeProperty": "findingNemo-Animation"
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdgeSeed, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdge, Neo4jLiteRepo.Sample",
     "MovieId": "2",
     "GenreId": "4",
     "SampleEdgeProperty": "findingNemo-Adventure"
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdgeSeed, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdge, Neo4jLiteRepo.Sample",
     "MovieId": "3",
     "GenreId": "1",
     "SampleEdgeProperty": "theIncredibles-Animation"
   },
   {
-    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdgeSeed, Neo4jLiteRepo.Sample",
+    "$type": "Neo4jLiteRepo.Sample.Edges.MovieGenreEdge, Neo4jLiteRepo.Sample",
     "MovieId": "3",
     "GenreId": "2",
     "SampleEdgeProperty": "theIncredibles-Action"
