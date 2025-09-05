@@ -176,7 +176,7 @@ namespace Neo4jLiteRepo.Tests.Integration
             var session = _host.Services.GetRequiredService<IDriver>().AsyncSession();
 
             // Act
-            var response = await _repo.GetAllNodesAndRelationshipsAsync(session);
+            var response = await _repo.GetAllNodesAndEdgesAsync(session);
 
             // Assert
             Assert.That(response, Is.Not.Null, "Response should not be null.");

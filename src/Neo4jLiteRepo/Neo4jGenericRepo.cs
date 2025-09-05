@@ -2288,7 +2288,10 @@ namespace Neo4jLiteRepo
             }
         }
 
-        // New opt-in overloads to include edge-object loading
+        /// <summary>
+        /// Loads a single node of the specified type by its primary key, also populates outgoing relationship List&lt;string&gt; properties.
+        /// Opt in to load edge-object maps for relationships that have an associated edge object type.
+        /// </summary>
         public async Task<T?> LoadAsync<T>(string id, bool includeEdgeObjects, IEnumerable<string>? includeEdges, CancellationToken ct = default)
             where T : GraphNode, new()
         {
