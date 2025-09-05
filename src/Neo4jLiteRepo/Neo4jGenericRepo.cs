@@ -12,6 +12,7 @@ using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Neo4jLiteRepo
@@ -82,14 +83,20 @@ namespace Neo4jLiteRepo
         Task<bool> CreateRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
 
         /// <summary>
+        /// Get a list of the names of all labels (node types) and their edges (in and out) as JSON.
+        /// </summary>
+        /// <remarks>Useful if you want to feed your graph map into AI.</remarks>
+        Task<string> GetGraphMapAsJsonAsync();
+
+        /// <summary>
         /// Retrieves all nodes and their relationships
         /// </summary>
-        Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync();
+        Task<NodeRelationshipsResponse> GetAllNodesAndEdgesAsync();
 
         /// <summary>
         /// Retrieves all nodes and their relationships using the provided session.
         /// </summary>
-        Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync(IAsyncSession session);
+        Task<NodeRelationshipsResponse> GetAllNodesAndEdgesAsync(IAsyncSession session);
 
 
         /// <summary>
@@ -2569,22 +2576,74 @@ namespace Neo4jLiteRepo
                     REQUIRE n.{node.GetPrimaryKeyName()} IS UNIQUE
                     """;
         }
-
-
-        public async Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync()
+        
+        /// <inheritdoc />
+        public async Task<string> GetGraphMapAsJsonAsync()
         {
-            await using var session = neo4jDriver.AsyncSession();
-            return await GetAllNodesAndRelationshipsAsync(session);
+            try
+            {
+                // Get current node types and relationships from the database
+                var graphStructure = await GetAllNodesAndEdgesAsync();
+
+                // Create a structured object with the graph information
+                var finalStructure = new
+                {
+                    GlobalProperties = new[] { "displayName", "upserted" },
+                    NodeTypes = graphStructure.NodeTypes.Select(n => new
+                    {
+                        Name = n.NodeType,
+                        OutgoingRelationships = n.OutgoingRelationships,
+                        IncomingRelationships = n.IncomingRelationships
+                    }).ToList()
+                };
+                // Serialize to JSON with minimal indentation
+                var result = JsonSerializer.Serialize(finalStructure, new JsonSerializerOptions
+                {
+                    WriteIndented = false
+                });
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "GetGraphDbNodesAndEdgesJsonAsync");
+
+                // default to a minimal structure
+                var structure = $$""" 
+                                  {
+                                      "GlobalProperties": [ "displayName", "upserted" ],
+                                      "NodeTypes": [ ]
+                                  }
+                                  """;
+                // Serialize to JSON with minimal indentation
+                var result = JsonSerializer.Serialize(structure, new JsonSerializerOptions
+                {
+                    WriteIndented = false
+                });
+
+                return result;
+            }
         }
 
         /// <summary>
-        /// Get a list of the names of all node types and their relationships (in and out).
-        /// WARNING: For large graphs, materializing all nodes/relationships may cause high memory usage.
-        /// Consider streaming or paginating results if this method is used on large datasets.
+        /// Get a list of the names of all labels (node types) and their edges (in and out).
+        /// Not any node data, just the types and relationships.
         /// </summary>
         /// <remarks>Ensure the session is appropriately disposed of! Caller Responsibility.</remarks>
         /// <returns>Useful if you want to feed your graph map into AI</returns>
-        public async Task<NodeRelationshipsResponse> GetAllNodesAndRelationshipsAsync(IAsyncSession session)
+        public async Task<NodeRelationshipsResponse> GetAllNodesAndEdgesAsync()
+        {
+            await using var session = neo4jDriver.AsyncSession();
+            return await GetAllNodesAndEdgesAsync(session);
+        }
+
+        /// <summary>
+        /// Get a list of the names of all labels (node types) and their edges (in and out).
+        /// Not any node data, just the types and relationships.
+        /// </summary>
+        /// <remarks>Ensure the session is appropriately disposed of! Caller Responsibility.</remarks>
+        /// <returns>Useful if you want to feed your graph map into AI</returns>
+        public async Task<NodeRelationshipsResponse> GetAllNodesAndEdgesAsync(IAsyncSession session)
         {
             if (session == null) throw new ArgumentNullException(nameof(session));
             // why exclude? I pass the result into AI to help it gen cypher. If a rel exists on many NodeType's, to minimize noise (and cost) I pass this instead: 
@@ -2654,7 +2713,7 @@ namespace Neo4jLiteRepo
         /// <returns>A list of strings containing the content and article information</returns>
         public async Task<List<string>> ExecuteVectorSimilaritySearchAsync(
             float[] questionEmbedding,
-            int topK = 25,
+            int topK = 20,
             bool includeContext = true,
             double similarityThreshold = 0.65)
         {
@@ -2670,7 +2729,8 @@ namespace Neo4jLiteRepo
                     var cursor = await tx.RunAsync(query, new
                     {
                         questionEmbedding,
-                        topK
+                        topK,
+                        similarityThreshold
                     });
 
                     // Process results
@@ -2692,7 +2752,7 @@ namespace Neo4jLiteRepo
                             ["articleUrl"] = record["articleUrl"].As<string>(),
                             ["score"] = record["score"].As<double>(),
                             ["entities"] = record["entities"].As<List<string>>(),
-                            ["sequenceOrder"] = record["sequenceOrder"].As<int>(),
+                            ["sequence"] = record["sequence"].As<int>(),
                             ["resultType"] = record["resultType"].As<string>()
                         };
                     }
@@ -2700,7 +2760,7 @@ namespace Neo4jLiteRepo
                     // Sort by article title and sequence order for better readability
                     var sortedResults = resultsDict.Values
                         .OrderBy(r => r["articleTitle"].ToString())
-                        .ThenBy(r => (int)r["sequenceOrder"])
+                        .ThenBy(r => (int)r["sequence"])
                         .ToList();
 
                     // Format results to return
@@ -2754,7 +2814,7 @@ namespace Neo4jLiteRepo
             catch (Exception ex)
             {
                 logger.LogError(ex, "Vector similarity search failed. QueryLength={QueryLength} ParamKeys=questionEmbedding,topK", query.Length);
-                throw new RepositoryException("Vector similarity search failed.", query, new[] { "questionEmbedding", "topK" }, ex);
+                throw new RepositoryException("Vector similarity search failed.", query, ["questionEmbedding", "topK"], ex);
             }
 
             return result;
