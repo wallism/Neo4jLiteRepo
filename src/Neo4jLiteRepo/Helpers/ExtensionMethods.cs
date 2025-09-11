@@ -38,31 +38,7 @@ namespace Neo4jLiteRepo.Helpers
                 : input.Split(delimiter).Last();
         }
 
-        public static object? AutoRedact(this object? value, string? propertyName)
-        {
-            if (value is not string || string.IsNullOrWhiteSpace(propertyName))
-                return value;
 
-            var str = value.ToString();
-            if (string.IsNullOrWhiteSpace(str))
-                return string.Empty;
-
-            var autoRedactProperties = ConfigHelper.GetConfigValues("Neo4jLiteRepo:AutoRedactProperties");
-            if (autoRedactProperties is null || !autoRedactProperties.Any())
-                return value;
-
-            foreach (var pattern in autoRedactProperties)
-            {
-                // Convert wildcard pattern to regex
-                var regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$";
-                if (Regex.IsMatch(propertyName, regexPattern, RegexOptions.IgnoreCase))
-                {
-                    return "REDACTED";
-                }
-            }
-
-            return value;
-        }
         public static object? SanitizeForCypher(this object? value)
         {
             return value is null ? 

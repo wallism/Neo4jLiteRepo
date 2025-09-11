@@ -9,18 +9,23 @@ namespace Neo4jLiteRepo.Tests
     {
         const string sectionKey = "Neo4jLiteRepo:AutoRedactProperties";
 
+        private IConfiguration _configuration = null!;
+        private IRedactionService _redactionService = null!;
+
         [SetUp]
         public void SetUp()
         {
+            // Default empty config
+            SetupConfigValues(new Dictionary<string, string>());
         }
 
         private void SetupConfigValues(Dictionary<string, string> inMemorySettings)
         {
-            var configuration = new ConfigurationBuilder()
+            _configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(inMemorySettings)
                 .Build();
 
-            ConfigHelper.Initialize(configuration);
+            _redactionService = new RedactionService(_configuration);
         }
 
         [Test]
@@ -31,7 +36,7 @@ namespace Neo4jLiteRepo.Tests
             var propertyName = "SensitiveProperty";
 
             // Act
-            var result = value.AutoRedact(propertyName);
+            var result = _redactionService.AutoRedact(value, propertyName);
 
             // Assert
             Assert.That(result, Is.EqualTo(value));
@@ -45,7 +50,7 @@ namespace Neo4jLiteRepo.Tests
             string propertyName = null;
 
             // Act
-            var result = value.AutoRedact(propertyName);
+            var result = _redactionService.AutoRedact(value, propertyName);
 
             // Assert
             Assert.That(result, Is.EqualTo(value));
@@ -60,31 +65,12 @@ namespace Neo4jLiteRepo.Tests
             SetupConfigValues(new Dictionary<string, string>());
             
             // Act
-            var result = value.AutoRedact(propertyName);
+            var result = _redactionService.AutoRedact(value, propertyName);
 
             // Assert
             Assert.That(result, Is.EqualTo(value));
         }
 
-        [Test]
-        public void GetConfigValues_ShouldReturnArray_WhenSectionExists()
-        {
-            // Arrange
-            var expectedValue = "testvalue";
-
-            var inMemorySettings = new Dictionary<string, string> {
-                { $"{sectionKey}:0", expectedValue }
-            };
-
-            SetupConfigValues(inMemorySettings);
-
-
-            // Act
-            var result = ConfigHelper.GetConfigValues(sectionKey);
-
-            // Assert
-            Assert.That(result, Is.EqualTo([ expectedValue ]));
-        }
 
         [Test]
         public void AutoRedact_ValueIsString_MatchesRedactableProperty_StartSuffix_ReturnsRedacted()
@@ -102,7 +88,7 @@ namespace Neo4jLiteRepo.Tests
             var propertyName = "SensitiveProperty";
 
             // Act
-            var result = value.AutoRedact(propertyName);
+            var result = _redactionService.AutoRedact(value, propertyName);
 
             // Assert
             Assert.That(result, Is.EqualTo("REDACTED"));
@@ -124,7 +110,7 @@ namespace Neo4jLiteRepo.Tests
             var propertyName = "MySensitive";
 
             // Act
-            var result = value.AutoRedact(propertyName);
+            var result = _redactionService.AutoRedact(value, propertyName);
 
             // Assert
             Assert.That(result, Is.EqualTo("REDACTED"));
@@ -146,7 +132,7 @@ namespace Neo4jLiteRepo.Tests
             var propertyName = "MySensitiveProperty";
 
             // Act
-            var result = value.AutoRedact(propertyName);
+            var result = _redactionService.AutoRedact(value, propertyName);
 
             // Assert
             Assert.That(result, Is.EqualTo("REDACTED"));
@@ -168,7 +154,7 @@ namespace Neo4jLiteRepo.Tests
             var propertyName = "MySensitiveProperty";
 
             // Act
-            var result = value.AutoRedact(propertyName);
+            var result = _redactionService.AutoRedact(value, propertyName);
 
             // Assert
             Assert.That(result, Is.EqualTo(value));
@@ -182,7 +168,7 @@ namespace Neo4jLiteRepo.Tests
             string propertyName = "SensitiveProperty";
 
             // Act
-            var result = value.AutoRedact(propertyName);
+            var result = _redactionService.AutoRedact(value, propertyName);
 
             // Assert
             Assert.That(result, Is.EqualTo(string.Empty));

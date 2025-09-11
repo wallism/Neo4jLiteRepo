@@ -28,9 +28,6 @@ builder.Configuration
 // Register services
 builder.Services.AddSingleton<NodeTrainer>();
 
-// Initialize config helper
-ConfigHelper.Initialize(builder.Configuration);
-
 // Build service provider
 var servicesProvider = builder.Services.BuildServiceProvider();
 
