@@ -24,7 +24,7 @@ CALL (c, a, score, entities) {
         a.documentUrl AS articleUrl,
         score AS mainScore,
         entities AS mainEntities,
-        COALESCE(c.sequenceOrder, 0) AS sequenceOrder, 
+        COALESCE(c.sequence, 0) AS sequence, 
         'main' AS resultType
     
     UNION
@@ -38,12 +38,12 @@ CALL (c, a, score, entities) {
     // Get context using NEXT relationship - chunks that come before (fixed to 2 chunks)
     OPTIONAL MATCH (prevChunk:ContentChunk)-[:NEXT*1..2]->(c)
     
-    // Also get context using parentId and SequenceOrder for chunks that might not have NEXT relationships
+    // Also get context using parentId and Sequence for chunks that might not have NEXT relationships
     // Get siblings within 2 positions in sequence
     OPTIONAL MATCH (siblingChunk:ContentChunk)
     WHERE siblingChunk.parentId = c.parentId
       AND siblingChunk.id <> c.id
-      AND abs(siblingChunk.SequenceOrder - c.SequenceOrder) <= 2
+      AND abs(siblingChunk.Sequence - c.Sequence) <= 2
     
     // For Section and SubSection parents, get parent and related chunks
     WITH c, a, score, entities, nextChunk, prevChunk, siblingChunk,
@@ -88,7 +88,7 @@ CALL (c, a, score, entities) {
             ELSE 0.2
         END) AS contextScore,
         [] AS contextEntities,
-        MIN(COALESCE(contextChunk.SequenceOrder, 0)) AS sequenceOrder,
+        MIN(COALESCE(contextChunk.Sequence, 0)) AS sequence,
         head(collect(CASE 
             WHEN contextChunk IN nextChunks THEN 'next'
             WHEN contextChunk IN prevChunks THEN 'previous'
@@ -108,7 +108,7 @@ CALL (c, a, score, entities) {
         articleUrl, 
         contextScore AS mainScore, 
         contextEntities AS mainEntities, 
-        COALESCE(sequenceOrder, 0) AS sequenceOrder, 
+        COALESCE(sequence, 0) AS sequence, 
         resultType
 }
 
