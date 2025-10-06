@@ -61,6 +61,15 @@ public abstract class FileNodeService<T> : INodeService
         }
     }
 
+    protected async Task<IEnumerable<T>> LoadDataFromFileWithoutTypeInfo(string fullFilePath)
+    {
+        var json = await DataLoadHelpers.LoadJsonFromFile(fullFilePath);
+        if (string.IsNullOrWhiteSpace(json))
+            return [];
+        var data = JsonConvert.DeserializeObject<IEnumerable<T>>(json, new JsonSerializerSettings());
+        return data ?? [];
+    }
+
     protected async Task<IEnumerable<GraphNode>> LoadDataFromFile(string fullFilePath)
     {
         var json = await DataLoadHelpers.LoadJsonFromFile(fullFilePath);
