@@ -25,6 +25,14 @@ namespace Neo4jLiteRepo
         Task<bool> EnforceUniqueConstraints(IEnumerable<INodeService> nodeServices);
 
         /// <summary>
+
+        /// <summary>
+        /// Executes the structured vector similarity search returning strongly typed rows (no string formatting side-effects).
+        /// </summary>
+        Task<IReadOnlyList<StructuredVectorSearchRow>> ExecuteVectorSimilaritySearchStructuredAsync(
+            float[] questionEmbedding,
+            int topK = 20,
+            double similarityThreshold = 0.65);
         /// Creates a vector index for embeddings on the specified labels with the given dimensions.
         /// </summary>
         Task<bool> CreateVectorIndexForEmbeddings(IList<string>? labelNames = null, int dimensions = 3072);
@@ -102,7 +110,12 @@ namespace Neo4jLiteRepo
         /// <summary>
         /// Executes a read query and returns a list of objects of type T.
         /// </summary>
-        Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
+        Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, 
+            IDictionary<string, object>? parameters = null)
+            where T : class, new();
+
+        Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query, string returnObjectKey, 
+            IAsyncSession session, IDictionary<string, object>? parameters = null)
             where T : class, new();
 
         /// <summary>
@@ -282,9 +295,6 @@ namespace Neo4jLiteRepo
         /// <returns>Collection (possibly empty) of loaded nodes.</returns>
         Task<IReadOnlyList<T>> LoadAllAsync<T>(CancellationToken ct = default) where T : GraphNode, new();
 
-        Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query,
-            string returnObjectKey, IAsyncSession session, IDictionary<string, object>? parameters = null)
-            where T : class, new();
 
         Task<T?> LoadAsync<T>(string id, bool includeEdgeObjects, IEnumerable<string>? includeEdges, CancellationToken ct = default)
             where T : GraphNode, new();
@@ -1745,6 +1755,17 @@ namespace Neo4jLiteRepo
                             var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToDateTime), BindingFlags.Static | BindingFlags.Public)!;
                             convertedValueExpr = Expression.Call(helper, valueVar);
                         }
+                        else if (prop.PropertyType.FullName == "Neo4jLiteRepo.Models.SequenceText")
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToSequenceText), BindingFlags.Static | BindingFlags.Public)!;
+                            convertedValueExpr = Expression.Call(helper, valueVar);
+                        }
+                        else if (prop.PropertyType.IsGenericType && prop.PropertyType.GetGenericTypeDefinition() == typeof(List<>) &&
+                                 prop.PropertyType.GetGenericArguments()[0].FullName == "Neo4jLiteRepo.Models.SequenceText")
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToSequenceTextList), BindingFlags.Static | BindingFlags.Public)!;
+                            convertedValueExpr = Expression.Call(helper, valueVar);
+                        }
                         else
                         {
                             var changeType = typeof(Convert).GetMethod(nameof(Convert.ChangeType), [typeof(object), typeof(Type)])!;
@@ -2949,5 +2970,73 @@ namespace Neo4jLiteRepo
             }
         }
 
+        /// <summary>
+        /// Structured variant of vector similarity search. Returns a flat list of result rows with consistent fields.
+        /// </summary>
+        public async Task<IReadOnlyList<StructuredVectorSearchRow>> ExecuteVectorSimilaritySearchStructuredAsync(
+            float[] questionEmbedding,
+            int topK = 20,
+            double similarityThreshold = 0.65)
+        {
+            var query = await GetCypherFromFile("ExecuteVectorSimilaritySearchStructured.cypher", logger);
+            await using var session = neo4jDriver.AsyncSession();
+            try
+            {
+                var rows = await session.ExecuteReadAsync(async tx =>
+                {
+                    var cursor = await tx.RunAsync(query, new
+                    {
+                        questionEmbedding,
+                        topK,
+                        similarityThreshold
+                    });
+
+                    var list = new List<StructuredVectorSearchRow>();
+                    await foreach (var record in cursor)
+                    {
+                        try
+                        {
+                            list.Add(new StructuredVectorSearchRow
+                            {
+                                ChunkId = record["chunkId"].As<string>(),
+                                ArticleTitle = record["articleTitle"].As<string>(),
+                                ArticleUrl = record["articleUrl"].As<string>(),
+                                SnippetType = record["snippetType"].As<string>(),
+                                Content = record["content"].As<string>(),
+                                BaseScore = record["baseScore"].As<double>(),
+                                Sequence = record["sequence"].As<int>(),
+                                Entities = record["entities"].As<List<string>>()
+                            });
+                        }
+                        catch (Exception exInner)
+                        {
+                            logger.LogWarning(exInner, "Failed to materialize structured vector search row");
+                        }
+                    }
+                    return (IReadOnlyList<StructuredVectorSearchRow>)list;
+                });
+                return rows;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Structured vector similarity search failed. QueryLength={QueryLength} ParamKeys=questionEmbedding,topK", query.Length);
+                throw new RepositoryException("Structured vector similarity search failed.", query, ["questionEmbedding", "topK"], ex);
+            }
+        }
     }
+}
+
+/// <summary>
+/// Row returned from structured vector similarity search.
+/// </summary>
+public sealed class StructuredVectorSearchRow
+{
+    public string ChunkId { get; set; } = string.Empty;
+    public string ArticleTitle { get; set; } = string.Empty;
+    public string ArticleUrl { get; set; } = string.Empty;
+    public string SnippetType { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
+    public double BaseScore { get; set; }
+    public int Sequence { get; set; }
+    public List<string> Entities { get; set; } = new();
 }

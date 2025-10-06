@@ -8,6 +8,9 @@ namespace Neo4jLiteRepo.Helpers
         bool AlwaysLoadFromFile { get; }
         bool ShouldRefreshNode(string nodeName);
         bool ShouldSkipNodeType(string nodeType);
+        /// <summary>
+        /// Gets a value indicating whether all articles should be updated (regardless of LastUpdated).
+        /// </summary>
         bool UpdateAllArticles { get; }
     }
 

@@ -1,4 +1,6 @@
 
+using Neo4jLiteRepo.Models;
+
 namespace Neo4jLiteRepo.Helpers
 {
     /// <summary>
@@ -194,6 +196,81 @@ namespace Neo4jLiteRepo.Helpers
             }
 
             return [];
+        }
+
+        /// <summary>
+        /// Converts a raw Neo4j value (expected string) into a SequenceText instance.
+        /// Since only the textual portion is persisted (sequence number discarded when writing),
+        /// the Sequence is set to 0 by default. Returns a default object with empty text on failure.
+        /// </summary>
+        public static SequenceText ConvertToSequenceText(this object value)
+        {
+            try
+            {
+                if (value is SequenceText st)
+                {
+                    return st;
+                }
+
+                var text = value?.ToString() ?? string.Empty;
+                return new SequenceText
+                {
+                    Text = text,
+                    Sequence = 0
+                };
+            }
+            catch
+            {
+                return new SequenceText { Text = string.Empty, Sequence = 0 };
+            }
+        }
+
+        /// <summary>
+        /// Converts a raw Neo4j value into a list of SequenceText. We store lists (BulletPoints, Notes)
+        /// as a single flattened comma-separated string on write. On read, we split by comma and recreate
+        /// ordered SequenceText entries (index-based sequence). If the raw value is already an IEnumerable
+        /// we enumerate and convert each element's string representation.
+        /// </summary>
+        public static List<SequenceText> ConvertToSequenceTextList(this object value)
+        {
+            var list = new List<SequenceText>();
+            try
+            {
+                if (value is List<SequenceText> existing)
+                {
+                    return existing;
+                }
+
+                IEnumerable<string> parts;
+                switch (value)
+                {
+                    case string s:
+                        // Split on comma – trimming whitespace. Empty entries removed.
+                        parts = s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                        break;
+                    case IEnumerable<string> strEnum:
+                        parts = strEnum;
+                        break;
+                    case IEnumerable<object> objEnum:
+                        parts = objEnum.Select(o => o?.ToString() ?? string.Empty);
+                        break;
+                    default:
+                        parts = [value?.ToString() ?? string.Empty];
+                        break;
+                }
+
+                var index = 0;
+                foreach (var p in parts)
+                {
+                    if (string.IsNullOrWhiteSpace(p)) continue;
+                    list.Add(new SequenceText { Text = p, Sequence = index++ });
+                }
+            }
+            catch
+            {
+                // swallow – return what we have
+            }
+            return list;
         }
     }
 }
