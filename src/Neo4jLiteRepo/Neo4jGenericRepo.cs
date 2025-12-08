@@ -357,6 +357,7 @@ namespace Neo4jLiteRepo
         private readonly IConfiguration _config;
         private readonly IDriver _neo4jDriver;
         private readonly IDataSourceService _dataSourceService;
+        private readonly string? _databaseName;
 
         public Neo4jGenericRepo(
             ILogger<Neo4jGenericRepo> logger,
@@ -368,6 +369,7 @@ namespace Neo4jLiteRepo
             _config = config;
             _neo4jDriver = neo4jDriver;
             _dataSourceService = dataSourceService;
+            _databaseName = config["Neo4jSettings:Database"];
         }
 
         #region Dispose
@@ -393,7 +395,9 @@ namespace Neo4jLiteRepo
         /// <inheritdoc/>
         public IAsyncSession StartSession()
         {
-            return _neo4jDriver.AsyncSession();
+            return string.IsNullOrEmpty(_databaseName) 
+                ? _neo4jDriver.AsyncSession() 
+                : _neo4jDriver.AsyncSession(o => o.WithDatabase(_databaseName));
         }
 
         #endregion

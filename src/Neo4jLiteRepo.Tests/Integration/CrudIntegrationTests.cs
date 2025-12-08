@@ -23,6 +23,7 @@ public class CrudIntegrationTests
     private IHost _host = null!;
     private IDriver _driver = null!;
     private INeo4jGenericRepo _repo = null!;
+    private const string TestDatabase = "IntegrationTests";
 
     [OneTimeSetUp]
     public async Task OneTimeSetup()
@@ -54,6 +55,9 @@ public class CrudIntegrationTests
             return driver;
         });
 
+        // Configure the database name for the repository to use
+        builder.Configuration["Neo4jSettings:Database"] = TestDatabase;
+
         builder.Services.AddSingleton<IDataRefreshPolicy, DataRefreshPolicy>();
 
         // Register node services
@@ -74,6 +78,9 @@ public class CrudIntegrationTests
         _host = builder.Build();
         _driver = _host.Services.GetRequiredService<IDriver>();
         _repo = _host.Services.GetRequiredService<INeo4jGenericRepo>();
+
+        // Ensure test database exists
+        await EnsureDatabaseExists();
 
         // Clean up before tests to start with empty state
         await CleanupDatabase();
@@ -400,10 +407,42 @@ public class CrudIntegrationTests
 
     private async Task CleanupDatabase()
     {
-        var session = _driver.AsyncSession();
+        var session = _driver.AsyncSession(o => o.WithDatabase(TestDatabase));
         try
         {
             await session.RunAsync("MATCH (n) DETACH DELETE n");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    private async Task EnsureDatabaseExists()
+    {
+        var session = _driver.AsyncSession(o => o.WithDatabase("system"));
+        try
+        {
+            // Check if database exists
+            var result = await session.RunAsync(
+                "SHOW DATABASES YIELD name WHERE name = $dbName RETURN name",
+                new { dbName = TestDatabase });
+            
+            var databases = await result.ToListAsync();
+            
+            if (databases.Count == 0)
+            {
+                // Create database if it doesn't exist
+                await session.RunAsync($"CREATE DATABASE {TestDatabase} IF NOT EXISTS");
+                Log.Information($"Created test database: {TestDatabase}");
+                
+                // Wait a moment for database to be ready
+                await Task.Delay(2000);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning($"Could not verify/create database {TestDatabase}: {ex.Message}");
         }
         finally
         {
