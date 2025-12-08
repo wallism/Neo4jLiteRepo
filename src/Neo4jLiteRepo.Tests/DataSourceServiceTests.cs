@@ -45,16 +45,22 @@ namespace Neo4jLiteRepo.Tests
         {
             // create a real ServiceProvider because alot of logic depends on the service collection.
             var services = new ServiceCollection();
-            services.AddSingleton<INodeService, GenreNodeService>();
-            services.AddSingleton<INodeService, MovieNodeService>();
             services.AddSingleton<IConfiguration>(_ => _configuration);
             services.AddSingleton<IDataRefreshPolicy, DataRefreshPolicy>();
 
             var drpLogger = Substitute.For<ILogger<DataRefreshPolicy>>();
             services.AddSingleton(drpLogger);
 
+            // Register DataSourceService and its interface before node services that depend on it
+            services.AddSingleton<ILogger<DataSourceService>>(_logger);
+            services.AddSingleton<DataSourceService>();
+            services.AddSingleton<IDataSourceService>(sp => sp.GetRequiredService<DataSourceService>());
+
+            services.AddSingleton<INodeService, GenreNodeService>();
+            services.AddSingleton<INodeService, MovieNodeService>();
+
             _serviceProvider = services.BuildServiceProvider();
-            _dataSourceService = new DataSourceService(_logger, _serviceProvider);
+            _dataSourceService = _serviceProvider.GetRequiredService<DataSourceService>();
         }
 
         [TearDown]
