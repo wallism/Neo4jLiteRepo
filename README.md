@@ -59,12 +59,20 @@ builder.Services.AddSingleton<INodeService, MovieNodeService>();
 ### Repository Usage (`Neo4jGenericRepo`)
 - `Neo4jGenericRepo` is the main entry point for database operations (node/relationship upsert, Cypher queries, constraints).
 - **Recent API additions:**
-  - Expanded overloads for upserting nodes and relationships, supporting session and transaction management for batching and atomicity.
-  - New methods for enforcing unique constraints, creating vector indexes, and streaming query results.
-  - Improved error handling and diagnostics for node/relationship operations.
-  - Methods for orphan node removal, batch relationship deletion, and vector similarity search.
+  - **CRUD Operations:** `LoadAsync<T>`, `LoadAllAsync<T>` (with pagination support), `DetachDeleteAsync<T>`, `DetachDeleteManyAsync<T>`, and `DetachDeleteNodesByIdsAsync` for managing node lifecycle.
+  - **Flexible API Architecture:** Most operations now support three usage patterns:
+    1. **Standalone** (creates own session/transaction) - simplest for single operations
+    2. **Session-based** (caller manages session) - efficient for batching multiple operations
+    3. **Transaction-based** (caller manages transaction) - full control for complex atomic operations
+  - **Relationship Management:** `MergeRelationshipAsync`, `DeleteRelationshipAsync`, `DeleteEdgesAsync`, and `DeleteRelationshipsOfTypeFromAsync` with session/transaction overloads for fine-grained control.
+  - **Maintenance Operations:** `RemoveOrphansAsync<T>` removes nodes with no relationships using efficient batch deletion.
+  - **Advanced Querying:** `ExecuteReadListAsync<T>`, `ExecuteReadScalarAsync<T>`, `ExecuteReadStreamAsync<T>` for streaming large result sets, and vector similarity search methods.
+  - **Schema Management:** Methods for enforcing unique constraints, creating vector indexes for embeddings.
+  - Improved error handling and diagnostics for all operations.
 - **Performance Note:**
-  - The repository now passes the parameters dictionary directly to Cypher queries, resulting in significant performance improvements for large and complex operations. Always use parameterized queries for best results.
+  - The repository passes parameters directly to Cypher queries for significant performance improvements.
+  - Use session-based overloads to batch multiple operations efficiently.
+  - Use transaction-based overloads when you need atomicity across multiple operations.
 - Prefer repository methods over custom Cypher unless advanced queries are needed.
 
 ### Edge Modeling (`Edge` and `IEdge`)
@@ -79,6 +87,56 @@ public class ActedIn : Edge
 {
     public string Role { get; set; }
 }
+```
+
+## Core Operations
+
+### CRUD Operations
+The repository provides comprehensive CRUD operations with flexible session/transaction management:
+
+```csharp
+// Load single node
+var movie = await repo.LoadAsync<Movie>("movie-id");
+
+// Load all nodes with pagination
+var movies = await repo.LoadAllAsync<Movie>(skip: 0, take: 50);
+
+// Upsert single node (creates own session)
+await repo.UpsertNode(movie);
+
+// Upsert multiple nodes efficiently using shared session
+await using var session = repo.StartSession();
+await repo.UpsertNodes(movies, session);
+
+// Delete single node (detaches all relationships)
+await repo.DetachDeleteAsync<Movie>("movie-id");
+
+// Delete multiple nodes by ID
+await repo.DetachDeleteManyAsync<Movie>(new[] { "id1", "id2" });
+```
+
+### Relationship Operations
+Create and manage relationships between nodes:
+
+```csharp
+// Merge (create if not exists) a relationship
+await repo.MergeRelationshipAsync(movie, "IN_GENRE", genre);
+
+// Delete a specific relationship
+await repo.DeleteRelationshipAsync(movie, "IN_GENRE", genre, EdgeDirection.Outgoing);
+
+// Delete all relationships of a type from a node
+await using var tx = await session.BeginTransactionAsync();
+await repo.DeleteRelationshipsOfTypeFromAsync(movie, "IN_GENRE", EdgeDirection.Outgoing, tx);
+await tx.CommitAsync();
+```
+
+### Maintenance Operations
+Keep your graph clean:
+
+```csharp
+// Remove orphan nodes (nodes with no relationships)
+var removedCount = await repo.RemoveOrphansAsync<Movie>();
 ```
 
 ## Getting Started

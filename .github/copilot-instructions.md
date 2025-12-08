@@ -37,11 +37,41 @@ Each node type requires a corresponding node service that implements `INodeServi
 
 ### Neo4jGenericRepo
 
-This is the central class for database interactions. It handles:
-- Creating and upserting nodes
-- Creating relationships between nodes
-- Enforcing unique constraints
-- Executing Cypher queries
+This is the central class for database interactions. It provides a comprehensive API organized into:
+
+**CRUD Operations:**
+- `LoadAsync<T>(id)` - Load single node by primary key
+- `LoadAllAsync<T>(skip, take)` - Load all nodes with pagination support
+- `UpsertNode<T>(node)` - Create or update a single node
+- `UpsertNodes<T>(nodes)` - Batch upsert multiple nodes
+- `DetachDeleteAsync<T>(node)` - Delete node and all its relationships
+- `DetachDeleteManyAsync<T>(ids)` - Delete multiple nodes by ID
+- `DetachDeleteNodesByIdsAsync(label, ids)` - Delete nodes by label and IDs
+
+**Relationship Management:**
+- `MergeRelationshipAsync(fromNode, rel, toNode)` - Create relationship if not exists
+- `DeleteRelationshipAsync(fromNode, rel, toNode, direction)` - Delete specific relationship
+- `DeleteEdgesAsync(specs)` - Batch delete multiple relationships
+- `DeleteRelationshipsOfTypeFromAsync(node, rel, direction)` - Delete all relationships of type from node
+- `CreateRelationshipsAsync<T>(nodes)` - Create all relationships defined in node attributes
+
+**Maintenance Operations:**
+- `RemoveOrphansAsync<T>()` - Remove nodes with no relationships (uses efficient batching)
+- `EnforceUniqueConstraints(nodeServices)` - Apply unique constraints to database
+- `CreateVectorIndexForEmbeddings(labels, dimensions)` - Create vector indexes for similarity search
+
+**Query Execution:**
+- `ExecuteReadListAsync<T>(query, alias, params)` - Execute Cypher and return typed list
+- `ExecuteReadScalarAsync<T>(query, params)` - Execute Cypher and return single value
+- `ExecuteReadStreamAsync<T>(query, alias, params)` - Stream large result sets efficiently
+- `ExecuteVectorSimilaritySearchAsync(embedding, topK)` - Vector similarity search
+
+**Session and Transaction Management:**
+- Most methods support three patterns:
+  1. **Standalone** - Method creates and manages its own session/transaction (simplest)
+  2. **Session-based** - Caller provides session (efficient for batching operations)
+  3. **Transaction-based** - Caller provides transaction (full control for atomicity)
+- `StartSession()` - Create new async session for batching operations
 
 ## Code Generation Guidelines
 
@@ -95,6 +125,45 @@ builder.Services.AddSingleton<INodeService, MovieNodeService>();
 - Values should contain primary key values of related nodes
 - Both sides of a relationship should be defined (bidirectional)
 
+### Session and Transaction Patterns
+
+**Single Operation (Standalone):**
+```csharp
+// Simplest - method manages session/transaction
+await repo.UpsertNode(movie);
+await repo.MergeRelationshipAsync(movie, "IN_GENRE", genre);
+```
+
+**Batch Operations (Session-based):**
+```csharp
+// Efficient - reuse session for multiple operations
+await using var session = repo.StartSession();
+await repo.UpsertNodes(movies, session);
+foreach (var movie in movies)
+{
+    await repo.CreateRelationshipsAsync(movie, session);
+}
+```
+
+**Atomic Operations (Transaction-based):**
+```csharp
+// Full control - ensure all operations succeed or all fail
+await using var session = repo.StartSession();
+await using var tx = await session.BeginTransactionAsync();
+try
+{
+    await repo.UpsertNode(movie, tx);
+    await repo.MergeRelationshipAsync(movie, "IN_GENRE", genre, tx);
+    await repo.DeleteRelationshipsOfTypeFromAsync(oldMovie, "IN_GENRE", EdgeDirection.Outgoing, tx);
+    await tx.CommitAsync();
+}
+catch
+{
+    await tx.RollbackAsync();
+    throw;
+}
+```
+
 ## Best Practices
 
 1. Use descriptive relationship names in UPPERCASE_WITH_UNDERSCORES format
@@ -103,6 +172,16 @@ builder.Services.AddSingleton<INodeService, MovieNodeService>();
 4. Configure connection settings in appsettings.json
 5. Use the dataSourceService to access nodes across the application
 6. Always include a custom implementation of `BuildDisplayName()`
+7. **Session Management:**
+   - Use standalone methods (no session parameter) for single operations
+   - Use session-based overloads when performing multiple operations for efficiency
+   - Use transaction-based overloads when you need atomicity across operations
+   - Always dispose sessions with `await using` pattern
+8. **Performance:**
+   - Batch operations using session-based overloads to reduce connection overhead
+   - Use `ExecuteReadStreamAsync` for large result sets to avoid memory spikes
+   - Use pagination (`skip`/`take`) with `LoadAllAsync` for large node collections
+   - Use `RemoveOrphansAsync` which automatically batches deletions efficiently
 
 ## .Net C# Recommendations
 1. Use `var` for local variable declarations when the type is clear from the right-hand side
