@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text;
 using Neo4jLiteRepo.NodeServices;
 using System.Text.RegularExpressions;

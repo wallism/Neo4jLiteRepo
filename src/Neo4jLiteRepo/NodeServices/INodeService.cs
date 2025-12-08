@@ -1,4 +1,4 @@
-﻿namespace Neo4jLiteRepo.NodeServices
+namespace Neo4jLiteRepo.NodeServices
 {
 
     public interface INodeService

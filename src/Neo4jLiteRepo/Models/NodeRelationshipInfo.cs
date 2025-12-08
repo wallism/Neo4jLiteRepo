@@ -1,4 +1,4 @@
-﻿namespace Neo4jLiteRepo.Models;
+namespace Neo4jLiteRepo.Models;
 
 /// <summary>
 /// Represents relationship metadata for a specific node type in the graph.

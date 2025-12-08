@@ -1,4 +1,4 @@
-﻿namespace Neo4jLiteRepo.Models;
+namespace Neo4jLiteRepo.Models;
 
 /// <summary>
 /// Specification for a relationship to delete (single directed or undirected edge between two nodes).

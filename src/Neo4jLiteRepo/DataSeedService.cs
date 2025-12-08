@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neo4jLiteRepo.Helpers;
@@ -18,8 +18,7 @@ namespace Neo4jLiteRepo
         INeo4jGenericRepo graphRepo,
         IDataSourceService dataSourceService,
         IDataRefreshPolicy dataRefreshPolicy,
-        IServiceProvider serviceProvider,
-        IConfiguration configuration) // Inject IConfiguration
+        IServiceProvider serviceProvider)
         : IDataSeedService
     {
 

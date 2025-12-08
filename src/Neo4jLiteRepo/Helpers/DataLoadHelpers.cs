@@ -1,4 +1,4 @@
-﻿namespace Neo4jLiteRepo.Helpers
+namespace Neo4jLiteRepo.Helpers
 {
     public static class DataLoadHelpers
     {

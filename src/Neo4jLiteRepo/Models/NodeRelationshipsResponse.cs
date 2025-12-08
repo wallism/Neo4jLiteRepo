@@ -1,4 +1,4 @@
-﻿namespace Neo4jLiteRepo.Models;
+namespace Neo4jLiteRepo.Models;
 
 /// <summary>
 /// Response model containing all node types and their relationship metadata for a graph query.

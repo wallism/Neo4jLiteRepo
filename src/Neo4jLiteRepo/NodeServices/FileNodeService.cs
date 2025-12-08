@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using Neo4jLiteRepo.Helpers;
 using Newtonsoft.Json;
 

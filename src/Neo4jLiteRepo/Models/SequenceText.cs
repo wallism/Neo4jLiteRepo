@@ -1,4 +1,4 @@
-﻿namespace Neo4jLiteRepo.Models;
+namespace Neo4jLiteRepo.Models;
 
 public class SequenceText
 {

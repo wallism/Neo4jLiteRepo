@@ -1,4 +1,4 @@
-﻿using Neo4j.Driver;
+using Neo4j.Driver;
 
 namespace Neo4jLiteRepo.Helpers
 {

@@ -1,4 +1,4 @@
-﻿namespace Neo4jLiteRepo.Models;
+namespace Neo4jLiteRepo.Models;
 
 /// <summary>
 /// If the edge has custom properties, create a class that inherits from this.

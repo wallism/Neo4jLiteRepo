@@ -1,4 +1,4 @@
-﻿using Neo4jLiteRepo.Attributes;
+using Neo4jLiteRepo.Attributes;
 using Neo4jLiteRepo.Helpers;
 using System.Reflection;
 using Newtonsoft.Json;

@@ -1,4 +1,4 @@
-﻿namespace Neo4jLiteRepo.Setup
+namespace Neo4jLiteRepo.Setup
 {
     public class Neo4jSettings
     {

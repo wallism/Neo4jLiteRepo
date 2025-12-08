@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.Models; // added for EdgeSeed
