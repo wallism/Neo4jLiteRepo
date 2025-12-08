@@ -327,13 +327,13 @@ public class Neo4jGenericRepoTests
     }
 
     [Test]
-    public void DetachDeleteManyAsync_WithEmptyList_ThrowsArgumentNullException()
+    public void DetachDeleteManyAsync_WithEmptyList_ThrowsArgumentException()
     {
-        // Arrange - empty list throws ArgumentNullException (misnamed param check in implementation)
+        // Arrange - empty list throws ArgumentException (semantically correct: list is not null, but empty/invalid)
         var ids = new List<string>();
 
         // Act & Assert
-        Assert.ThrowsAsync<ArgumentNullException>(
+        Assert.ThrowsAsync<ArgumentException>(
             async () => await _repo.DetachDeleteManyAsync<Movie>(ids, _mockTransaction));
     }
 

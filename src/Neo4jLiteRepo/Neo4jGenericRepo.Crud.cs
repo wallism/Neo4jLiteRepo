@@ -13,13 +13,18 @@ namespace Neo4jLiteRepo;
 /// </summary>
 public partial class Neo4jGenericRepo
 {
+    /// <summary>
+    /// Default batch size for bulk operations. Balances memory usage with round-trip overhead.
+    /// </summary>
+    private const int DefaultBatchSize = 500;
+
     #region UpsertNode
 
     /// <inheritdoc/>
     public async Task<IResultSummary> UpsertNode<T>(T node, CancellationToken ct = default) where T : GraphNode
     {
         await using var session = _neo4jDriver.AsyncSession();
-        return await UpsertNode(node, session, ct);
+        return await UpsertNode(node, session, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -28,16 +33,16 @@ public partial class Neo4jGenericRepo
     public async Task<IResultSummary> UpsertNode<T>(T node, IAsyncSession session, CancellationToken ct = default) where T : GraphNode
     {
         _logger.LogInformation("({label}:{node})", node.LabelName, node.DisplayName);
-        await using var tx = await session.BeginTransactionAsync();
+        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
-            var result = await UpsertNode(node, tx, ct);
-            await tx.CommitAsync();
+            var result = await UpsertNode(node, tx, ct).ConfigureAwait(false);
+            await tx.CommitAsync().ConfigureAwait(false);
             return result;
         }
-        catch (Exception)
+        catch
         {
-            await tx.RollbackAsync();
+            await tx.RollbackAsync().ConfigureAwait(false);
             throw;
         }
     }
@@ -48,7 +53,7 @@ public partial class Neo4jGenericRepo
         ct.ThrowIfCancellationRequested();
         var cypher = BuildUpsertNodeQuery(node);
         _logger.LogInformation("upsert ({label}:{pk})", node.LabelName, node.GetPrimaryKeyValue());
-        return await tx.RunWriteAsync(cypher.Query, cypher.Parameters);
+        return await tx.RunWriteAsync(cypher.Query, cypher.Parameters).ConfigureAwait(false);
     }
 
     #endregion
@@ -136,7 +141,7 @@ public partial class Neo4jGenericRepo
                 return await cursor.ToListAsync(cancellationToken: ct);
             });
 
-            if (records.Count == 0) return null;
+            if (records.Count is 0) return null;
             var record = records[0];
             if (!record.Keys.Contains("n"))
                 throw new RepositoryException("Load query did not return alias 'n'.", query, ["id"], null);
@@ -182,7 +187,7 @@ public partial class Neo4jGenericRepo
                 return await cursor.ToListAsync(cancellationToken: ct);
             });
 
-            if (records.Count == 0) return null;
+            if (records.Count is 0) return null;
             var record = records[0];
             var node = record["n"].As<INode>();
             var entity = MapNodeToObject<T>(node);
@@ -245,7 +250,7 @@ public partial class Neo4jGenericRepo
                 return await cursor.ToListAsync(cancellationToken: ct);
             });
 
-            if (records.Count == 0) return Array.Empty<T>();
+            if (records.Count is 0) return [];
             var results = new List<T>(records.Count);
 
             foreach (var record in records)
@@ -263,7 +268,7 @@ public partial class Neo4jGenericRepo
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Failed loading all nodes for {Label}", label);
-            throw new RepositoryException($"Failed loading all nodes for {label}", query, Array.Empty<string>(), ex);
+            throw new RepositoryException($"Failed loading all nodes for {label}", query, [], ex);
         }
     }
 
@@ -294,7 +299,7 @@ public partial class Neo4jGenericRepo
                 return await cursor.ToListAsync(cancellationToken: ct);
             });
 
-            if (records.Count == 0) return Array.Empty<T>();
+            if (records.Count is 0) return [];
             var results = new List<T>(records.Count);
 
             foreach (var record in records)
@@ -469,8 +474,8 @@ public partial class Neo4jGenericRepo
         where T : GraphNode, new()
     {
         ct.ThrowIfCancellationRequested();
-        if (tx == null) throw new ArgumentNullException(nameof(tx));
-        if (ids.Count == 0) throw new ArgumentNullException(nameof(ids));
+        ArgumentNullException.ThrowIfNull(tx);
+        if (ids.Count is 0) throw new ArgumentException("At least one id is required", nameof(ids));
 
         var pkName = GraphNode.GetPrimaryKeyName<T>();
         var labelName = GraphNode.GetLabelName<T>();
@@ -534,7 +539,7 @@ public partial class Neo4jGenericRepo
     /// <param name="ct">Cancellation token</param>
     public async Task DetachDeleteNodesByIdsAsync(string label, IEnumerable<string> ids, IAsyncSession session, CancellationToken ct = default)
     {
-        if (session == null) throw new ArgumentNullException(nameof(session));
+        ArgumentNullException.ThrowIfNull(session);
         ct.ThrowIfCancellationRequested();
         await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
@@ -564,8 +569,8 @@ public partial class Neo4jGenericRepo
     /// </summary>
     public async Task DetachDeleteNodesByIdsAsync(string label, IEnumerable<string> ids, IAsyncTransaction tx, CancellationToken ct = default)
     {
-        if (tx == null) throw new ArgumentNullException(nameof(tx));
-        if (string.IsNullOrWhiteSpace(label)) throw new ArgumentException("Label is required", nameof(label));
+        ArgumentNullException.ThrowIfNull(tx);
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
         if (!_labelValidationRegex.IsMatch(label))
             throw new ArgumentException($"Invalid label '{label}'. Only A-Z, a-z, 0-9 and '_' allowed.", nameof(label));
 
@@ -575,24 +580,23 @@ public partial class Neo4jGenericRepo
             return;
         }
 
-        var idList = ids?.Where(s => !string.IsNullOrWhiteSpace(s))
+        var idList = ids?
+            .Where(s => !string.IsNullOrWhiteSpace(s))
             .Select(s => s.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList() ?? [];
-        if (idList.Count == 0)
+        if (idList.Count is 0)
         {
             _logger.LogInformation("DeleteNodesByIdsAsync called with 0 ids for label {Label}; nothing to do", label);
             return;
         }
-
-        const int batchSize = 500; // consider making configurable
         var total = idList.Count;
         var processed = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        for (var i = 0; i < idList.Count; i += batchSize)
+        for (var i = 0; i < idList.Count; i += DefaultBatchSize)
         {
             ct.ThrowIfCancellationRequested();
-            var batch = idList.Skip(i).Take(batchSize).ToList();
+            var batch = idList.Skip(i).Take(DefaultBatchSize).ToList();
             var query = $$"""
                           UNWIND $ids AS id
                           MATCH (n:{{label}} { id: id })
@@ -612,7 +616,7 @@ public partial class Neo4jGenericRepo
         }
 
         sw.Stop();
-        _logger.LogInformation("DeleteNodesByIdsAsync deleted {Count} nodes for label {Label} in {ElapsedMs}ms (batches of {BatchSize})", processed, label, sw.ElapsedMilliseconds, batchSize);
+        _logger.LogInformation("DeleteNodesByIdsAsync deleted {Count} nodes for label {Label} in {ElapsedMs}ms (batches of {BatchSize})", processed, label, sw.ElapsedMilliseconds, DefaultBatchSize);
     }
 
     #endregion
