@@ -38,8 +38,8 @@ public partial class Neo4jGenericRepo
         catch (Exception ex)
         {
             _logger.LogError(ex, "Problem executing read list of strings. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length,
-                string.Join(',', parameters?.Keys ?? Array.Empty<string>()));
-            throw new RepositoryException("Read list (string) query failed.", query, parameters?.Keys ?? Array.Empty<string>(), ex);
+                string.Join(',', parameters?.Keys ?? []));
+            throw new RepositoryException("Read list (string) query failed.", query, parameters?.Keys ?? [], ex);
         }
     }
 
@@ -110,8 +110,8 @@ public partial class Neo4jGenericRepo
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Problem executing read list. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters?.Keys ?? Array.Empty<string>()));
-            throw new RepositoryException("Read list query failed.", query, parameters?.Keys ?? Array.Empty<string>(), ex);
+            _logger.LogError(ex, "Problem executing read list. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters?.Keys ?? []));
+            throw new RepositoryException("Read list query failed.", query, parameters?.Keys ?? [], ex);
         }
     }
 
@@ -172,7 +172,7 @@ public partial class Neo4jGenericRepo
         await using var session = _neo4jDriver.AsyncSession();
         try
         {
-            parameters = parameters ?? new Dictionary<string, object>();
+            parameters ??= new Dictionary<string, object>();
 
             var result = await session.ExecuteReadAsync(async tx =>
             {
@@ -185,8 +185,8 @@ public partial class Neo4jGenericRepo
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Problem executing scalar read. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters?.Keys ?? Array.Empty<string>()));
-            throw new RepositoryException("Read scalar query failed.", query, parameters?.Keys ?? Array.Empty<string>(), ex);
+            _logger.LogError(ex, "Problem executing scalar read. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters?.Keys ?? []));
+            throw new RepositoryException("Read scalar query failed.", query, parameters?.Keys ?? [], ex);
         }
     }
 
@@ -204,7 +204,12 @@ public partial class Neo4jGenericRepo
     /// <param name="parameters">Query parameters (nullable -&gt; empty).</param>
     /// <param name="returnAlias">Alias of the node in the RETURN clause (default 'node').</param>
     /// <param name="runner">Optional existing transaction/session runner; if null a temp session is created.</param>
-    /// <param name="ct">Cancellation token.</param>
+    /// <param name="ct">Cancellation token. Currently unused as Neo4j driver's RunAsync does not accept cancellation tokens directly.
+    /// Retained for API consistency and future driver support.</param>
+    /// <remarks>
+    /// TODO: Monitor Neo4j .NET driver updates for native CancellationToken support in query execution.
+    /// See: https://github.com/neo4j/neo4j-dotnet-driver/issues for tracking.
+    /// </remarks>
     private async Task<IReadOnlyList<T>> ExecuteReadNodeQueryAsync<T>(string query, IDictionary<string, object>? parameters, string returnAlias, IAsyncQueryRunner? runner, CancellationToken ct)
         where T : GraphNode
     {
