@@ -23,6 +23,7 @@ public interface IDataSourceService
 
     T? GetSourceNodeFor<T>(string nodePrimaryKeyValue) where T : GraphNode;
     T? GetSourceNodeFor<T>(string key, string nodePrimaryKeyValue) where T : GraphNode;
+    T? GetSourceNodeByDisplayName<T>(string displayName) where T : GraphNode;
 
     void AddSourceNodes<T>(List<T> nodes) where T : GraphNode;
     void AddSourceNodes<T>(string key, List<T> nodes) where T : GraphNode;
@@ -84,7 +85,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     }
 
     /// <summary>
-    /// Get Source Nodes of a specific type. "key" is the type of T, e.g. "WebApp". This overload would be redundant,
+    /// Get Source Nodes of a specific type. "key" is the type of T, e.g. "Movie". This overload would be redundant,
     /// it is here to allow a call using reflection (e.g. in Neo4jGenericRepo)
     /// </summary>
     public IEnumerable<T> GetSourceNodesFor<T>(string key) where T : GraphNode
@@ -124,7 +125,7 @@ public class DataSourceService(ILogger<DataSourceService> logger,
     }
 
     /// <summary>
-    /// Get a specific Node. "key" is the type of T, e.g. "WebApp". This overload would be redundant but it is here
+    /// Get a specific Node. "key" is the type of T, e.g. "Movie". This overload would be redundant but it is here
     /// to allow a call using reflection (e.g. in Neo4jGenericRepo
     /// </summary>
     public T? GetSourceNodeFor<T>(string key, string nodePrimaryKeyValue) where T : GraphNode
@@ -132,6 +133,15 @@ public class DataSourceService(ILogger<DataSourceService> logger,
         var sourceNodes = GetSourceNodesFor<T>(key);
         // null warning suppressed because GetPrimaryKeyValue throws an ex if the value is null
         return sourceNodes.FirstOrDefault(n => n.GetPrimaryKeyValue()!.Equals(nodePrimaryKeyValue, StringComparison.InvariantCultureIgnoreCase));
+    }
+
+    /// <summary>
+    /// Get a specific Node by its display name.
+    /// </summary>
+    public T? GetSourceNodeByDisplayName<T>(string displayName) where T : GraphNode
+    {
+        var sourceNodes = GetSourceNodesFor<T>();
+        return sourceNodes.FirstOrDefault(n => n.DisplayName.Equals(displayName, StringComparison.InvariantCultureIgnoreCase));
     }
 
     /// <summary>
