@@ -116,7 +116,7 @@ public partial class Neo4jGenericRepo
             // Create a structured object with the graph information
             var finalStructure = new
             {
-                GlobalProperties = new[] { "displayName", "upserted" },
+                GlobalProperties = (string[])["displayName", "upserted"],
                 NodeTypes = graphStructure.NodeTypes.Select(n => new
                 {
                     Name = n.NodeType,

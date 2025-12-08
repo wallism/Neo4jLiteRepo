@@ -106,7 +106,7 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc/>
     public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes, IAsyncTransaction tx, CancellationToken ct = default) where T : GraphNode
     {
-        var results = new List<IResultSummary>();
+        List<IResultSummary> results = [];
         foreach (var node in nodes)
         {
             // UpsertNode handles its own cancellation check; no need to throw each iteration here.

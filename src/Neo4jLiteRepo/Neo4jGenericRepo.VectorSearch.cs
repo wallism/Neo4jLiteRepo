@@ -76,7 +76,7 @@ public partial class Neo4jGenericRepo
                     .ToList();
 
                 // Format results to return
-                var formattedResults = new List<string>();
+                List<string> formattedResults = [];
 
                 var currentArticle = "";
                 foreach (var r in sortedResults)
@@ -112,7 +112,7 @@ public partial class Neo4jGenericRepo
                     else if (resultType == "subsection_related")
                         prefix = "📋 "; // SubSection-related content
 
-                    var entities = r["entities"] as List<string> ?? new List<string>();
+                    var entities = r["entities"] as List<string> ?? [];
                     var entityInfo = entities.Any() ? $" [Entities: {string.Join(", ", entities)}]" : "";
 
                     var content = $"{prefix}{r["content"]}{entityInfo}";
@@ -157,7 +157,7 @@ public partial class Neo4jGenericRepo
                     similarityThreshold
                 });
 
-                var list = new List<StructuredVectorSearchRow>();
+                List<StructuredVectorSearchRow> list = [];
                 await foreach (var record in cursor)
                 {
                     try

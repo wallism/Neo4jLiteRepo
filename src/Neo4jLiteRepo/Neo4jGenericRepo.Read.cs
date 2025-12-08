@@ -69,7 +69,7 @@ public partial class Neo4jGenericRepo
             var result = await session.ExecuteReadAsync(async tx =>
             {
                 var cursor = await tx.RunAsync(query, parameters);
-                var list = new List<T>();
+                List<T> list = [];
                 var aliasValidated = false;
                 var idProp = typeof(T).GetProperties()
                     .FirstOrDefault(p => string.Equals(p.Name, "Id", StringComparison.OrdinalIgnoreCase) && p.GetMethod != null);
@@ -220,7 +220,7 @@ public partial class Neo4jGenericRepo
             try
             {
                 var cursor = await r.RunAsync(query, parameters);
-                var list = new List<T>();
+                List<T> list = [];
                 while (await cursor.FetchAsync())
                 {
                     var record = cursor.Current;

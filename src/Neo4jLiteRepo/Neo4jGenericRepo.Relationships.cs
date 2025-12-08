@@ -431,7 +431,7 @@ public partial class Neo4jGenericRepo
                 var edgeParameters = new Dictionary<string, object?>();
                 // create setClause and parameters for edge properties
                 var edgeType = matchingEdge.GetType();
-                var setClauses = new List<string>();
+                List<string> setClauses = [];
                 foreach (var prop in edgeType.GetProperties())
                 {
                     if (prop.Name.Equals("FromId") || prop.Name.Equals("ToId"))

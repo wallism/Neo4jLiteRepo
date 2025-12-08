@@ -538,11 +538,11 @@ namespace Neo4jLiteRepo
                 ["upserted"] = DateTimeOffset.UtcNow
             };
 
-            var setClauses = new List<string>
-            {
+            List<string> setClauses =
+            [
                 $"n.{node.GetPrimaryKeyName()} = ${node.GetPrimaryKeyName()}",
                 $"n.{node.NodeDisplayNameProperty} = $displayName"
-            };
+            ];
 
             // Recursive flattening logic for container properties
             void AddNodePropertiesRecursive(object? obj, int depth, string prefix = "")
@@ -703,7 +703,7 @@ namespace Neo4jLiteRepo
                     Expression.Call(typeof(System.Runtime.CompilerServices.RuntimeHelpers).GetMethod("GetUninitializedObject", BindingFlags.Public | BindingFlags.Static)!, Expression.Constant(typeof(T))),
                     typeof(T));
             var assignObj = Expression.Assign(objVar, createObjExpr);
-            var blockExpressions = new List<Expression> { assignObj };
+            List<Expression> blockExpressions = [assignObj];
             var tryGetValueMethod = typeof(IReadOnlyDictionary<string, object>).GetMethod("TryGetValue");
 
             foreach (var prop in typeof(T).GetProperties().Where(p => p.SetMethod != null && p.SetMethod.IsPublic))
@@ -711,7 +711,7 @@ namespace Neo4jLiteRepo
                 try
                 {
                     var attr = prop.GetCustomAttribute<NodePropertyAttribute>();
-                    var candidates = new List<string>();
+                    List<string> candidates = [];
                     if (!string.IsNullOrWhiteSpace(attr?.PropertyName)) candidates.Add(attr!.PropertyName);
                     candidates.Add(prop.Name.ToGraphPropertyCasing());
                     if (!candidates.Contains(prop.Name)) candidates.Add(prop.Name); // raw fallback
@@ -839,7 +839,7 @@ namespace Neo4jLiteRepo
         /// </summary>
         private static List<EdgeMeta> GetRelationshipMetadata(Type t)
         {
-            var metas = new List<EdgeMeta>();
+            List<EdgeMeta> metas = [];
             var props = t.GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
             // Determine source label and pk (for FromId in pattern comprehensions)
