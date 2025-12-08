@@ -29,15 +29,16 @@ public partial class Neo4jGenericRepo
             await MergeRelationshipAsync(fromNode, rel, toNode, tx, ct);
             await tx.CommitAsync().ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to merge relationship {Rel} from {FromLabel} to {ToLabel}", rel, fromNode.LabelName, toNode.LabelName);
             try
             {
                 await tx.RollbackAsync().ConfigureAwait(false);
             }
-            catch
+            catch (Exception rollbackEx)
             {
-                /* ignore */
+                _logger.LogWarning(rollbackEx, "Rollback failed after merge relationship error");
             }
 
             throw;
@@ -102,10 +103,11 @@ public partial class Neo4jGenericRepo
             await DeleteRelationshipAsync(fromNode, rel, toNode, direction, tx, ct).ConfigureAwait(false);
             await tx.CommitAsync().ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to delete relationship {Rel} from {FromLabel} to {ToLabel}", rel, fromNode.LabelName, toNode.LabelName);
             try { await tx.RollbackAsync().ConfigureAwait(false); }
-            catch { /* ignore */ }
+            catch (Exception rollbackEx) { _logger.LogWarning(rollbackEx, "Rollback failed after delete relationship error"); }
             throw;
         }
     }

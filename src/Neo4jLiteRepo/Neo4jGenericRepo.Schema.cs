@@ -94,9 +94,9 @@ public partial class Neo4jGenericRepo
             _logger.LogInformation("CreateVectorIndexForEmbeddings completed in {ElapsedMs}ms for {LabelCount} labels", sw.ElapsedMilliseconds, labelNames.Count);
             return true;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // catch and continue, will have been logged in ExecuteWriteQuery
+            _logger.LogError(ex, "Failed to create vector index for embeddings");
             return false;
         }
     }

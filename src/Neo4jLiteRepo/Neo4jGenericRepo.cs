@@ -798,9 +798,9 @@ namespace Neo4jLiteRepo
                 if (propInfo?.GetValue(node) is IReadOnlyDictionary<string, object> dictFromProp)
                     return dictFromProp;
             }
-            catch
+            catch (Exception)
             {
-                // ignore and fallback
+                // ignore and fallback - static method cannot access logger
             }
 
             // Fallback: build dictionary from Keys/Values if available
@@ -822,9 +822,9 @@ namespace Neo4jLiteRepo
                     return dict;
                 }
             }
-            catch
+            catch (Exception)
             {
-                // ignore
+                // ignore - static method cannot access logger
             }
 
             return new Dictionary<string, object>();
@@ -1042,8 +1042,9 @@ namespace Neo4jLiteRepo
                 {
                     maps = record[r.ObjAlias].As<List<object>>();
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger.LogDebug(ex, "Failed to get edge objects for alias {Alias}", r.ObjAlias);
                     maps = null;
                 }
                 if (maps == null || maps.Count == 0) continue;
@@ -1161,9 +1162,9 @@ namespace Neo4jLiteRepo
                     var converted = Convert.ChangeType(value, destType);
                     prop.SetValue(target, converted);
                 }
-                catch
+                catch (Exception)
                 {
-                    // best-effort; ignore assignment failures
+                    // best-effort; ignore assignment failures - static local function cannot access logger
                 }
             }
         }

@@ -30,15 +30,16 @@ public partial class Neo4jGenericRepo
             await tx.CommitAsync();
             return result;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to remove orphans for type {Type}", typeof(T).Name);
             try
             {
                 await tx.RollbackAsync();
             }
-            catch
+            catch (Exception rollbackEx)
             {
-                /* ignore */
+                _logger.LogWarning(rollbackEx, "Rollback failed after remove orphans error");
             }
 
             throw;

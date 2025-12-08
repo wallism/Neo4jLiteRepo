@@ -40,8 +40,9 @@ public partial class Neo4jGenericRepo
             await tx.CommitAsync().ConfigureAwait(false);
             return result;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to upsert node {Label}:{DisplayName}", node.LabelName, node.DisplayName);
             await tx.RollbackAsync().ConfigureAwait(false);
             throw;
         }
@@ -86,15 +87,16 @@ public partial class Neo4jGenericRepo
             await tx.CommitAsync().ConfigureAwait(false);
             return result;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to upsert nodes");
             try
             {
                 await tx.RollbackAsync().ConfigureAwait(false);
             }
-            catch
+            catch (Exception rollbackEx)
             {
-                /* ignore */
+                _logger.LogWarning(rollbackEx, "Rollback failed after upsert nodes error");
             }
 
             throw;
@@ -340,13 +342,14 @@ public partial class Neo4jGenericRepo
             await tx.CommitAsync().ConfigureAwait(false);
             return result;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to detach delete node");
             try
             {
                 await tx.RollbackAsync().ConfigureAwait(false);
             }
-            catch { /* ignore */ }
+            catch (Exception rollbackEx) { _logger.LogWarning(rollbackEx, "Rollback failed after detach delete error"); }
             throw;
         }
     }
@@ -372,13 +375,14 @@ public partial class Neo4jGenericRepo
             await tx.CommitAsync().ConfigureAwait(false);
             return result;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to detach delete node by primary key {PkValue}", pkValue);
             try
             {
                 await tx.RollbackAsync().ConfigureAwait(false);
             }
-            catch { /* ignore */ }
+            catch (Exception rollbackEx) { _logger.LogWarning(rollbackEx, "Rollback failed after detach delete error"); }
             throw;
         }
     }
@@ -426,13 +430,14 @@ public partial class Neo4jGenericRepo
             await tx.CommitAsync().ConfigureAwait(false);
             return result;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to detach delete many nodes");
             try
             {
                 await tx.RollbackAsync().ConfigureAwait(false);
             }
-            catch { /* ignore */ }
+            catch (Exception rollbackEx) { _logger.LogWarning(rollbackEx, "Rollback failed after detach delete many error"); }
             throw;
         }
     }
@@ -458,13 +463,14 @@ public partial class Neo4jGenericRepo
             await tx.CommitAsync().ConfigureAwait(false);
             return result;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to detach delete many nodes by ids");
             try
             {
                 await tx.RollbackAsync().ConfigureAwait(false);
             }
-            catch { /* ignore */ }
+            catch (Exception rollbackEx) { _logger.LogWarning(rollbackEx, "Rollback failed after detach delete many error"); }
             throw;
         }
     }
@@ -515,15 +521,16 @@ public partial class Neo4jGenericRepo
             await DetachDeleteNodesByIdsAsync(label, ids, tx, ct).ConfigureAwait(false);
             await tx.CommitAsync().ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to detach delete nodes by ids for label {Label}", label);
             try
             {
                 await tx.RollbackAsync().ConfigureAwait(false);
             }
-            catch
+            catch (Exception rollbackEx)
             {
-                /* ignore */
+                _logger.LogWarning(rollbackEx, "Rollback failed after detach delete nodes by ids error");
             }
 
             throw;
@@ -547,15 +554,16 @@ public partial class Neo4jGenericRepo
             await DetachDeleteNodesByIdsAsync(label, ids, tx, ct).ConfigureAwait(false);
             await tx.CommitAsync().ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Failed to detach delete nodes by ids for label {Label} (session overload)", label);
             try
             {
                 await tx.RollbackAsync().ConfigureAwait(false);
             }
-            catch
+            catch (Exception rollbackEx)
             {
-                /* ignore */
+                _logger.LogWarning(rollbackEx, "Rollback failed after detach delete nodes by ids error");
             }
 
             throw;
