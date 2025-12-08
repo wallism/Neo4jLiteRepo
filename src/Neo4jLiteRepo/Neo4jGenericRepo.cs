@@ -1,18 +1,14 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Neo4j.Driver;
-using Neo4j.Driver.Internal.Result;
 using Neo4jLiteRepo.Attributes;
 using Neo4jLiteRepo.Exceptions;
 using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.Models;
 using Neo4jLiteRepo.NodeServices;
-using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
-using System.Reflection.Emit;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Neo4jLiteRepo
@@ -350,26 +346,59 @@ namespace Neo4jLiteRepo
             where TRelated : GraphNode, new();
     }
 
-    
-    public class Neo4jGenericRepo(
-        ILogger<Neo4jGenericRepo> logger,
-        IConfiguration config,
-        IDriver neo4jDriver,
-        IDataSourceService dataSourceService) : IAsyncDisposable, INeo4jGenericRepo
+    /// <summary>
+    /// Generic repository for Neo4j graph database operations.
+    /// This partial class contains the core infrastructure: constructor, fields, Dispose, and private helpers.
+    /// Method implementations are split across partial class files for maintainability.
+    /// </summary>
+    public partial class Neo4jGenericRepo : IAsyncDisposable, INeo4jGenericRepo
     {
+        private readonly ILogger<Neo4jGenericRepo> _logger;
+        private readonly IConfiguration _config;
+        private readonly IDriver _neo4jDriver;
+        private readonly IDataSourceService _dataSourceService;
+
+        public Neo4jGenericRepo(
+            ILogger<Neo4jGenericRepo> logger,
+            IConfiguration config,
+            IDriver neo4jDriver,
+            IDataSourceService dataSourceService)
+        {
+            _logger = logger;
+            _config = config;
+            _neo4jDriver = neo4jDriver;
+            _dataSourceService = dataSourceService;
+        }
+
+        #region Dispose
+
         /// <inheritdoc/>
         public void Dispose()
         {
-            neo4jDriver.Dispose();
+            _neo4jDriver.Dispose();
         }
+
+        /// <inheritdoc/>
+        public async ValueTask DisposeAsync()
+        {
+            await _neo4jDriver.DisposeAsync();
+        }
+
+        #endregion
+
+        #region Session Management
 
         protected string Now => DateTimeOffset.Now.ToLocalTime().ToString("O");
 
         /// <inheritdoc/>
         public IAsyncSession StartSession()
         {
-            return neo4jDriver.AsyncSession();
+            return _neo4jDriver.AsyncSession();
         }
+
+        #endregion
+
+        #region Write Query Helpers
 
         /// <summary>
         /// Executes a write query using the provided session.
@@ -391,19 +420,19 @@ namespace Neo4jLiteRepo
             }
             catch (AuthenticationException authEx)
             {
-                logger.LogError(authEx, "ExecuteWriteQuery auth error (runner).");
+                _logger.LogError(authEx, "ExecuteWriteQuery auth error (runner).");
                 throw;
             }
             catch (OperationCanceledException)
             {
-                logger.LogWarning("[OperationCanceled] ExecuteWriteQuery auth error (runner).");
+                _logger.LogWarning("[OperationCanceled] ExecuteWriteQuery auth error (runner).");
                 throw;
             }
             catch (Exception ex)
             {
                 // only write to console in case there are secrets in the query
                 Console.WriteLine($"**** write query failed ****{query}");
-                logger.LogError(ex, "ExecuteWriteQuery (runner) failure. QueryLength={QueryLength}", query.Length);
+                _logger.LogError(ex, "ExecuteWriteQuery (runner) failure. QueryLength={QueryLength}", query.Length);
                 throw new RepositoryException("Failed executing write query (runner).", query, ["Now"], ex);
             }
         }
@@ -446,630 +475,30 @@ namespace Neo4jLiteRepo
             }
             catch (AuthenticationException authEx)
             {
-                logger.LogError(authEx, "ExecuteWriteQuery auth error (runner/param).");
+                _logger.LogError(authEx, "ExecuteWriteQuery auth error (runner/param).");
                 throw;
             }
             catch (OperationCanceledException)
             {
-                logger.LogWarning("[OperationCanceled] ExecuteWriteQuery auth error (runner/param).");
+                _logger.LogWarning("[OperationCanceled] ExecuteWriteQuery auth error (runner/param).");
                 throw;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"**** write query failed ****{query}");
-                logger.LogError(ex, "ExecuteWriteQuery (runner/param) failure. QueryLength={QueryLength}", query.Length);
+                _logger.LogError(ex, "ExecuteWriteQuery (runner/param) failure. QueryLength={QueryLength}", query.Length);
                 // Attempt to surface parameter property names (best-effort)
                 var paramNames = parameters.GetType().GetProperties().Select(p => p.Name).ToArray();
                 throw new RepositoryException("Failed executing write query (runner/param).", query, paramNames, ex);
             }
         }
 
+        #endregion
 
-        /// <summary>
-        /// Deletes (DETACH DELETE - i.e. all relationships connected to the node will also be deleted)
-        /// nodes of the specified label whose id property matches any of the provided ids.
-        /// Uses batching + UNWIND for large collections to stay within query / memory limits. Assumes identity property 'id'.
-        /// </summary>
-        public async Task DetachDeleteNodesByIdsAsync(string label, IEnumerable<string> ids, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            if (string.IsNullOrWhiteSpace(label)) throw new ArgumentException("Label is required", nameof(label));
-            if (!_labelValidationRegex.IsMatch(label))
-                throw new ArgumentException($"Invalid label '{label}'. Only A-Z, a-z, 0-9 and '_' allowed.", nameof(label));
+        #region Validation Helpers
 
-            if (!IsInDetachDeleteWhitelist(label))
-            {
-                logger.LogWarning("Label {Label} is not in the whitelist for DetachDeleteNodesByIdsAsync; skipping delete operation", label);
-                return;
-            }
+        private static readonly Regex _labelValidationRegex = new("^[A-Za-z0-9_]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-            var idList = ids?.Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => s.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList() ?? [];
-            if (idList.Count == 0)
-            {
-                logger.LogInformation("DeleteNodesByIdsAsync called with 0 ids for label {Label}; nothing to do", label);
-                return;
-            }
-
-            const int batchSize = 500; // consider making configurable
-            var total = idList.Count;
-            var processed = 0;
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            for (var i = 0; i < idList.Count; i += batchSize)
-            {
-                ct.ThrowIfCancellationRequested();
-                var batch = idList.Skip(i).Take(batchSize).ToList();
-                var query = $$"""
-                              UNWIND $ids AS id
-                              MATCH (n:{{label}} { id: id })
-                              DETACH DELETE n
-                              """; // label safe after regex validation
-                try
-                {
-                    await ExecuteWriteQuery(tx, query, new { ids = batch });
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    logger.LogError(ex, "Failed deleting nodes batch {Start}-{End} of {Total} for label {Label}", i + 1, i + batch.Count, total, label);
-                    throw;
-                }
-
-                processed += batch.Count;
-            }
-
-            sw.Stop();
-            logger.LogInformation("DeleteNodesByIdsAsync deleted {Count} nodes for label {Label} in {ElapsedMs}ms (batches of {BatchSize})", processed, label, sw.ElapsedMilliseconds, batchSize);
-        }
-
-        private bool IsInDetachDeleteWhitelist(string label)
-        {
-            // Only allow certain labels to be deleted via this method to avoid accidental mass deletes.
-            logger.LogWarning("ZERO labels defined on whitelist"); // todo: make configurable
-            return false;
-        }
-
-
-
-        public async Task<IResultSummary> DetachDeleteAsync<T>(T node, CancellationToken ct = default)
-            where T : GraphNode, new()
-        {
-            if (node == null) throw new ArgumentNullException(nameof(node));
-
-            await using var session = neo4jDriver.AsyncSession();
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                var result = await DetachDeleteAsync(node, tx, ct).ConfigureAwait(false);
-                await tx.CommitAsync().ConfigureAwait(false);
-                return result;
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch { /* ignore */ }
-                throw;
-            }
-        }
-
-        public async Task<IResultSummary> DetachDeleteAsync<T>(T node, IAsyncTransaction tx, CancellationToken ct = default)
-            where T : GraphNode, new()
-        {
-            if (node == null) throw new ArgumentNullException(nameof(node));
-            var pkValue = node.GetPrimaryKeyValue();
-            return await DetachDeleteAsync<T>(pkValue, tx, ct);
-        }
-
-
-        public async Task<IResultSummary> DetachDeleteAsync<T>(string pkValue, CancellationToken ct = default)
-            where T : GraphNode, new()
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                var result = await DetachDeleteAsync<T>(pkValue, tx, ct).ConfigureAwait(false);
-                await tx.CommitAsync().ConfigureAwait(false);
-                return result;
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch { /* ignore */ }
-                throw;
-            }
-        }
-
-        public async Task<IResultSummary> DetachDeleteAsync<T>(string pkValue, IAsyncTransaction tx, CancellationToken ct = default) 
-            where T : GraphNode, new()
-        {
-            ct.ThrowIfCancellationRequested();
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            if (string.IsNullOrWhiteSpace(pkValue)) throw new ArgumentException("Primary key value required", nameof(pkValue));
-
-            var pkName = GraphNode.GetPrimaryKeyName<T>();
-            var labelName = GraphNode.GetLabelName<T>();
-
-            var cypher = $$"""
-                           MATCH (n:{{labelName}} {{{pkName}}: $pkValue })
-                           DETACH DELETE n
-                           """;
-            var parameters = new Dictionary<string, object> {{ "pkValue", pkValue }};
-            try
-            {
-                return await tx.RunWriteAsync(cypher, parameters);
-            }
-            catch (Exception ex) // catch to log
-            {
-                logger.LogError(ex, "running cypher: {query}", cypher);
-                throw;
-            }
-        }
-
-
-        public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<T> nodes, CancellationToken ct = default) 
-            where T : GraphNode, new()
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                var result = await DetachDeleteManyAsync(nodes, tx, ct).ConfigureAwait(false);
-                await tx.CommitAsync().ConfigureAwait(false);
-                return result;
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch { /* ignore */ }
-                throw;
-            }
-        }
-
-        public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<T> nodes, IAsyncTransaction tx, CancellationToken ct = default)
-            where T : GraphNode, new()
-        {
-            if (nodes == null) throw new ArgumentNullException(nameof(nodes));
-            var ids = nodes.Select(n => n.GetPrimaryKeyValue()).ToList();
-            return await DetachDeleteManyAsync<T>(ids, tx, ct);
-        }
-
-        public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<string> ids, CancellationToken ct = default) 
-            where T : GraphNode, new()
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                var result = await DetachDeleteManyAsync<T>(ids, tx, ct).ConfigureAwait(false);
-                await tx.CommitAsync().ConfigureAwait(false);
-                return result;
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch { /* ignore */ }
-                throw;
-            }
-        }
-
-        public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<string> ids, IAsyncTransaction tx, CancellationToken ct = default) 
-            where T : GraphNode, new()
-        {
-            ct.ThrowIfCancellationRequested();
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            if (ids.Count == 0) throw new ArgumentNullException(nameof(ids));
-
-            var pkName = GraphNode.GetPrimaryKeyName<T>();
-            var labelName = GraphNode.GetLabelName<T>();
-            
-            var cypher = $"""
-                          MATCH (n:{labelName})
-                          WHERE n.{pkName} IN $pkValues
-                          DETACH DELETE n
-                          """;
-
-            var parameters = new Dictionary<string, object>
-            {
-                { "pkValues", ids }
-            };
-
-            return await tx.RunWriteAsync(cypher, parameters);
-        }
-
-        /// <summary>
-        /// detach delete nodes by id.creates its own session & transaction.
-        /// Mirrors the pattern used by UpsertNodes convenience overloads.
-        /// </summary>
-        /// <param name="label">Node label</param>
-        /// <param name="ids">Primary key values (id property)</param>
-        /// <param name="ct">Cancellation token</param>
-        public async Task DetachDeleteNodesByIdsAsync(string label, IEnumerable<string> ids, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            await using var session = neo4jDriver.AsyncSession();
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                await DetachDeleteNodesByIdsAsync(label, ids, tx, ct).ConfigureAwait(false);
-                await tx.CommitAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                    /* ignore */
-                }
-
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Deletes (DETACH DELETE) nodes by id using an existing session (wraps in a transaction internally).
-        /// </summary>
-        /// <param name="label">Node label</param>
-        /// <param name="ids">Primary key values (id property)</param>
-        /// <param name="session">Existing async session</param>
-        /// <param name="ct">Cancellation token</param>
-        public async Task DetachDeleteNodesByIdsAsync(string label, IEnumerable<string> ids, IAsyncSession session, CancellationToken ct = default)
-        {
-            if (session == null) throw new ArgumentNullException(nameof(session));
-            ct.ThrowIfCancellationRequested();
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                await DetachDeleteNodesByIdsAsync(label, ids, tx, ct).ConfigureAwait(false);
-                await tx.CommitAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                    /* ignore */
-                }
-
-                throw;
-            }
-        }
-
-
-        /// <summary>
-        /// Merges (creates if missing) a relationship of type <paramref name="rel"/> from one node to another.
-        /// </summary>
-        public async Task MergeRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            await using var session = neo4jDriver.AsyncSession();
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                // Use new refactored method below
-                await MergeRelationshipAsync(fromNode, rel, toNode, tx, ct);
-                await tx.CommitAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                    /* ignore */
-                }
-
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Merges (creates if missing) a relationship of type <paramref name="rel"/> from one node to another.
-        /// </summary>
-        public async Task MergeRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            //await MergeRelationshipAsync(fromNode.GetType().Name, fromNode.Id, rel, toNode.GetType().Name, toNode.Id, tx, ct);
-
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            ct.ThrowIfCancellationRequested();
-            ValidateRel(rel, nameof(rel));
-            var fromPkValue = fromNode.GetPrimaryKeyValue();
-            var toPkValue = toNode.GetPrimaryKeyValue();
-            var fromPkName = fromNode.GetPrimaryKeyName();
-            var toPkName = toNode.GetPrimaryKeyName();
-
-            if (string.IsNullOrWhiteSpace(fromPkValue)) throw new ArgumentException($"{fromPkName} required", fromPkName);
-            if (string.IsNullOrWhiteSpace(toPkValue)) throw new ArgumentException($"{toPkName} required", toPkName);
-
-            var cypher = $$"""
-                MATCH (f:{{fromNode.LabelName}} { {{fromPkName}}: $fromPkValue })
-                MATCH (t:{{toNode.LabelName}} { {{toPkName}}: $toPkValue })
-                MERGE (f)-[r:{{rel}}]->(t)
-                RETURN r
-            """;
-
-            var parameters = new Dictionary<string, object>
-            {
-                { "fromPkValue", fromPkValue },
-                { "toPkValue", toPkValue }
-            };
-            try
-            {
-                await ExecuteWriteQuery(tx, cypher, parameters);
-                logger.LogInformation("MERGE {FromLabel}:{FromPkValue}-[{Rel}]->{ToLabel}:{ToPkValue}", fromNode.LabelName, fromPkValue, rel, toNode.LabelName, toPkValue);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Failed merging relationship {Rel} {FromLabel}:{FromPkValue}->{ToLabel}:{ToPkValue}", rel, fromNode.LabelName, fromPkValue, toNode.LabelName, toPkValue);
-                throw;
-            }
-        }
-
-
-
-
-        /// <summary>
-        /// Deletes a single relationship of the specified type between two nodes (specify direction).
-        /// Session-managed overload to mirror MergeRelationshipAsync.
-        /// </summary>
-        public async Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, EdgeDirection direction, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            await using var session = neo4jDriver.AsyncSession();
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                await DeleteRelationshipAsync(fromNode, rel, toNode, direction, tx, ct).ConfigureAwait(false);
-                await tx.CommitAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                try { await tx.RollbackAsync().ConfigureAwait(false); }
-                catch { /* ignore */ }
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Deletes a single relationship of the specified type between two nodes (specify direction).
-        /// Transaction-based overload that mirrors the PK-based matching used by MergeRelationshipAsync.
-        /// </summary>
-        public async Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, EdgeDirection direction, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            ct.ThrowIfCancellationRequested();
-            ValidateRel(rel, nameof(rel));
-
-            var fromPkValue = fromNode.GetPrimaryKeyValue();
-            var toPkValue = toNode.GetPrimaryKeyValue();
-            var fromPkName = fromNode.GetPrimaryKeyName();
-            var toPkName = toNode.GetPrimaryKeyName();
-
-            if (string.IsNullOrWhiteSpace(fromPkValue)) throw new ArgumentException($"{fromPkName} required", fromPkName);
-            if (string.IsNullOrWhiteSpace(toPkValue)) throw new ArgumentException($"{toPkName} required", toPkName);
-
-            var pattern = direction switch
-            {
-                EdgeDirection.Outgoing => $"(f)-[r:{rel}]->(t)",
-                EdgeDirection.Incoming => $"(f)<-[r:{rel}]-(t)",
-                EdgeDirection.Both => $"(f)-[r:{rel}]-(t)",
-                _ => throw new ArgumentException($"Invalid direction: {direction}")
-            };
-
-            var cypher = $$"""
-                MATCH (f:{{fromNode.LabelName}} { {{fromPkName}}: $fromPkValue })
-                MATCH (t:{{toNode.LabelName}} { {{toPkName}}: $toPkValue })
-                MATCH {{pattern}}
-                DELETE r
-            """;
-
-            var parameters = new Dictionary<string, object>
-            {
-                { "fromPkValue", fromPkValue },
-                { "toPkValue", toPkValue }
-            };
-
-            try
-            {
-                await ExecuteWriteQuery(tx, cypher, parameters);
-                logger.LogInformation("Deleted relationship {Rel} {FromLabel}:{FromPkValue} -> {ToLabel}:{ToPkValue}", rel, fromNode.LabelName, fromPkValue, toNode.LabelName, toPkValue);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Failed deleting relationship {Rel} {FromLabel}:{FromPkValue}->{ToLabel}:{ToPkValue}", rel, fromNode.LabelName, fromPkValue, toNode.LabelName, toPkValue);
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Deletes multiple relationships (single edges) in batches. Each spec identifies a potential relationship between two nodes.
-        /// Groups by (FromLabel, ToLabel, Rel, Direction) so labels & rel type can be inlined safely (identifiers cannot be parameterized in Cypher).
-        /// </summary>
-        /// <remarks>
-        /// Similar validation & patterns as <see cref="DeleteRelationshipAsync"/> but optimized for bulk removal.
-        /// Uses UNWIND with a batch size (default 500) to avoid overwhelming memory in large deletions.
-        /// </remarks>
-        /// <param name="specs">Collection of relationship delete specifications.</param>
-        /// <param name="tx">Active transaction (required).</param>
-        /// <param name="ct">Cancellation token.</param>
-        public async Task DeleteEdgesAsync(IEnumerable<EdgeDeleteSpec> specs, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            if (specs == null) throw new ArgumentNullException(nameof(specs));
-
-            // Materialize and sanitize list (filter out obviously invalid entries early, while logging).
-            var list = specs
-                .Where(s => !string.IsNullOrWhiteSpace(s.Rel))
-                .Distinct()
-                .ToList();
-
-            if (list.Count == 0)
-            {
-                logger.LogInformation("DeleteEdgesAsync called with 0 valid specs; nothing to do");
-                return;
-            }
-
-            const int batchSize = 500; // align with node delete batching
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            var total = list.Count;
-            var processed = 0;
-
-            // Group by items that can share a single UNWIND query (labels + rel + direction must be constants in text)
-            var groups = list.GroupBy(s => 
-                new { FromNode = s.FromNode, ToNode = s.ToNode, s.Rel, s.Direction });
-
-            foreach (var group in groups)
-            {
-                ct.ThrowIfCancellationRequested();
-                // Validate identifiers once per group (throws if invalid)
-                ValidateRel(group.Key.Rel, nameof(group.Key.Rel));
-                var specsInGroup = group.ToList();
-                if(specsInGroup.Count == 0)
-                    continue;
-
-                var sampleSpec = specsInGroup.First();
-                var fromPk = sampleSpec.FromNode.GetPrimaryKeyName();
-                var toPk = sampleSpec.ToNode.GetPrimaryKeyName();
-
-                // Determine relationship pattern fragment (same logic as single delete variant)
-                var pattern = group.Key.Direction switch
-                {
-                    EdgeDirection.Outgoing => $"(f)-[r:{group.Key.Rel}]->(t)",
-                    EdgeDirection.Incoming => $"(f)<-[r:{group.Key.Rel}]-(t)",
-                    EdgeDirection.Both => $"(f)-[r:{group.Key.Rel}]-(t)",
-                    _ => throw new ArgumentException($"Invalid direction {group.Key.Direction}")
-                };
-
-                for (var i = 0; i < specsInGroup.Count; i += batchSize)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    // NOTE: Neo4j .NET driver only supports primitive types, lists and dictionaries for parameters.
-                    // Using an anonymous type list (new { fromId, toId }) causes a ProtocolException.
-                    // Convert each pair to a Dictionary<string, object> to satisfy driver constraints.
-                    var batchPairs = specsInGroup.Skip(i).Take(batchSize)
-                        .Select(s => new Dictionary<string, object>
-                        {
-                            ["fromId"] = s.FromNode.GetPrimaryKeyValue(),
-                            ["toId"] = s.ToNode.GetPrimaryKeyValue()
-                        })
-                        .ToList();
-
-                    if (batchPairs.Count == 0)
-                        continue;
-
-                    var cypher = $$"""
-                                   UNWIND $pairs AS pair
-                                   MATCH (f:{{group.Key.FromNode.LabelName}} { {{fromPk}}: pair.fromId })
-                                   MATCH (t:{{group.Key.ToNode.LabelName}} { {{toPk}}: pair.toId })
-                                   MATCH {{pattern}}
-                                   DELETE r
-                                   """; // identifiers validated
-
-                    try
-                    {
-                        await ExecuteWriteQuery(tx, cypher, new { pairs = batchPairs });
-                        processed += batchPairs.Count;
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        logger.LogError(ex,
-                            "Failed deleting relationship batch {Start}-{End} of {GroupCount} (TotalSpecs={Total}) {FromLabel}-{Rel}-{ToLabel} Direction={Direction}",
-                            i + 1, i + batchPairs.Count, specsInGroup.Count, total, group.Key.FromNode.LabelName, group.Key.Rel, group.Key.ToNode.LabelName, group.Key.Direction);
-                        throw;
-                    }
-                }
-            }
-
-            sw.Stop();
-            logger.LogInformation("DeleteRelationshipsAsync deleted up to {Processed} relationship specs in {ElapsedMs}ms (batches of {BatchSize})", processed, sw.ElapsedMilliseconds, batchSize);
-        }
-
-        /// <summary>
-        /// Deletes all outgoing relationships of a given type from a specific node.
-        /// </summary>
-        /// <remarks>if unsure about direction, use EdgeDirection.Outgoing</remarks>
-        public async Task<IResultSummary> DeleteRelationshipsOfTypeFromAsync(GraphNode fromNode, string rel, EdgeDirection direction, 
-            IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            ct.ThrowIfCancellationRequested();
-
-            var fromPkValue = fromNode.GetPrimaryKeyValue();
-            var fromPkName = fromNode.GetPrimaryKeyName();
-
-            ValidateRel(rel, nameof(rel));
-
-            var pattern = direction switch
-            {
-                EdgeDirection.Outgoing => $"-[r:{rel}]->()",
-                EdgeDirection.Incoming => $"<-[r:{rel}]-()",
-                EdgeDirection.Both => $"-[r:{rel}]-",
-                _ => throw new ArgumentException($"Invalid direction: {direction}")
-            };
-
-            var cypher = $$"""
-                           MATCH (n:{{fromNode.LabelName}} { {{fromPkName}}: $fromPkValue }){{pattern}}
-                           DELETE r
-                           """;
-
-            var parameters = new Dictionary<string, object>
-            {
-                { "fromPkValue", fromPkValue }
-            };
-
-            try
-            {
-                var result = await ExecuteWriteQuery(tx, cypher, parameters);
-                if(result.Counters.RelationshipsDeleted > 0)
-                    logger.LogInformation("Deleted all ({count}) {Rel} relationships from {Label}:{Id}", result.Counters.RelationshipsDeleted, rel, fromNode.LabelName, fromPkValue);
-                return result;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Failed deleting relationships {Rel} from {Label}:{Id}", rel, fromNode.LabelName, fromPkValue);
-                throw;
-            }
-        }
-
-        // Domain-specific cascade deletes (like Section subtree) intentionally moved out to service layer.
-
-        public Task<bool> ContentChunkHasEmbeddingAsync(string chunkId, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task UpdateChunkEmbeddingAsync(string chunkId, float[] vector, string? hash, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<(string? Text, string? Hash)> GetChunkTextAndHashAsync(string chunkId, IAsyncTransaction tx, CancellationToken ct = default)
-        {
-            throw new NotImplementedException();
-        }
-
-        // Validation helpers (keep internal to centralize any future pattern changes)
         private static void ValidateLabel(string value, string paramName)
         {
             if (string.IsNullOrWhiteSpace(value) || !_labelValidationRegex.IsMatch(value))
@@ -1083,92 +512,16 @@ namespace Neo4jLiteRepo
                 throw new ArgumentException($"Invalid relationship type '{value}'", paramName);
         }
 
-        public async Task<IResultSummary> UpsertNode<T>(T node, CancellationToken ct = default) where T : GraphNode
+        private bool IsInDetachDeleteWhitelist(string label)
         {
-            await using var session = neo4jDriver.AsyncSession();
-            return await UpsertNode(node, session, ct);
+            // Only allow certain labels to be deleted via this method to avoid accidental mass deletes.
+            _logger.LogWarning("ZERO labels defined on whitelist"); // todo: make configurable
+            return false;
         }
 
-        /// <summary>
-        /// Upserts a node using an existing session. Caller is responsible for disposing the session.
-        /// </summary>
-        public async Task<IResultSummary> UpsertNode<T>(T node, IAsyncSession session, CancellationToken ct = default) where T : GraphNode
-        {
-            logger.LogInformation("({label}:{node})", node.LabelName, node.DisplayName);
-            await using var tx = await session.BeginTransactionAsync();
-            try
-            {
-                var result = await UpsertNode(node, tx, ct);
-                await tx.CommitAsync();
-                return result;
-            }
-            catch (Exception)
-            {
-                await tx.RollbackAsync();
-                throw;
-            }
-        }
+        #endregion
 
-        public async Task<IResultSummary> UpsertNode<T>(T node, IAsyncTransaction tx, CancellationToken ct = default) where T : GraphNode
-        {
-            ct.ThrowIfCancellationRequested();
-            var cypher = BuildUpsertNodeQuery(node);
-            logger.LogInformation("upsert ({label}:{pk})", node.LabelName, node.GetPrimaryKeyValue());
-            return await tx.RunWriteAsync(cypher.Query, cypher.Parameters);
-        }
-
-
-        public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes) where T : GraphNode
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            return await UpsertNodes(nodes, session, CancellationToken.None).ConfigureAwait(false);
-        }
-
-        public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes, CancellationToken ct) where T : GraphNode
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            return await UpsertNodes(nodes, session, ct).ConfigureAwait(false);
-        }
-
-        /// <summary>
-        /// Upserts nodes using an existing session. Caller is responsible for disposing the session.
-        /// </summary>
-        public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes, IAsyncSession session, CancellationToken ct = default) where T : GraphNode
-        {
-            await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
-            try
-            {
-                var result = await UpsertNodes(nodes, tx, ct);
-                await tx.CommitAsync().ConfigureAwait(false);
-                return result;
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync().ConfigureAwait(false);
-                }
-                catch
-                {
-                    /* ignore */
-                }
-
-                throw;
-            }
-        }
-
-        public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes, IAsyncTransaction tx, CancellationToken ct = default) where T : GraphNode
-        {
-            var results = new List<IResultSummary>();
-            foreach (var node in nodes)
-            {
-                // UpsertNode handles its own cancellation check; no need to throw each iteration here.
-                var cursor = await UpsertNode(node, tx, ct).ConfigureAwait(false);
-                results.Add(cursor);
-            }
-
-            return results;
-        }
+        #region Upsert Query Builder
 
         /// <summary>
         /// Builds the Cypher MERGE/SET query used by all UpsertNode overloads.
@@ -1277,10 +630,6 @@ namespace Neo4jLiteRepo
             return new CypherQuery(query, nonNullParams);
         }
 
-
-
-
-
         private static bool IsSimpleType(Type type)
         {
             return type.IsPrimitive
@@ -1295,368 +644,9 @@ namespace Neo4jLiteRepo
                    && type != typeof(string);
         }
 
-        public async Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            foreach (var node in fromNodes)
-            {
-                var result = await CreateRelationshipsAsync(node, session).ConfigureAwait(false);
-                if (!result)
-                    return false; // exit on failure. (may want to continue on failure of individual nodes?)
-            }
+        #endregion
 
-            return true;
-        }
-
-        public async Task<bool> CreateRelationshipsAsync<T>(T fromNode) where T : GraphNode
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            return await CreateRelationshipsAsync(fromNode, session);
-        }
-
-        /// <summary>
-        /// Creates relationships using an existing session. Caller is responsible for disposing the session.
-        /// </summary>
-        public async Task<bool> CreateRelationshipsAsync<T>(T fromNode, IAsyncSession session) where T : GraphNode
-        {
-            var nodeType = fromNode.GetType();
-            var properties = nodeType.GetProperties();
-
-            foreach (var property in properties)
-            {
-                var relationshipAttribute = property.GetCustomAttributes()
-                    .FirstOrDefault(attr => attr.GetType().IsGenericType && attr.GetType()
-                        .GetGenericTypeDefinition() == typeof(NodeRelationshipAttribute<>));
-
-                if (relationshipAttribute == null) 
-                    continue;
-                var relatedNodeType = relationshipAttribute.GetType().GetGenericArguments()[0];
-                var relatedNodeTypeName = relatedNodeType.Name;
-                var relationshipName = relationshipAttribute.GetType().GetProperty("RelationshipName")?.GetValue(relationshipAttribute)?.ToString()?.ToUpper();
-                // seedEdgeType will only be not null when the edge has custom properties
-                var seedEdgeType = relationshipAttribute.GetType().GetProperty("SeedEdgeType")?
-                    .GetValue(relationshipAttribute) as Type;
-
-                if (string.IsNullOrWhiteSpace(relationshipName))
-                {
-                    logger.LogError("RelationshipName is null or empty {NodeType}.", nodeType.Name);
-                    return false;
-                }
-                if (string.IsNullOrWhiteSpace(relatedNodeTypeName))
-                {
-                    logger.LogError("relatedNodeType is null or empty {NodeType}.", nodeType.Name);
-                    return false;
-                }
-
-                var value = property.GetValue(fromNode);
-                if (value is not IEnumerable<string> relatedNodeIds)
-                    continue;
-
-                // edges that have custom properties
-                List<CustomEdge> edgeSeeds = [];
-                if (seedEdgeType != null)
-                {
-                    // Try to load edge data from DataSourceService
-                    edgeSeeds = dataSourceService.GetSourceEdgesFor<CustomEdge>(seedEdgeType.Name).ToList();
-                    if (!edgeSeeds.Any())
-                    {
-                        logger.LogWarning("EdgeSeed type {seedEdgeType} specified but no edge data found in DataSourceService.", seedEdgeType.Name);
-                    }
-                }
-
-                // Simple relationships (string IDs)
-                foreach (var toNodeKey in relatedNodeIds)
-                {
-                    // stock standard relationship with no properties on the edge
-                    if (seedEdgeType == null)
-                    {
-                        await ExecuteCreateRelationshipsAsync(fromNode,
-                            session,
-                            relatedNodeType,
-                            relationshipName,
-                            toNodeKey,
-                            relatedNodeTypeName, [], string.Empty);
-                        continue;
-                    }
-                        
-                    // get the edgeSeeds for this node
-                    var nodeEdgeSeeds = edgeSeeds.FindAll(seed => 
-                        seed.GetFromId() == fromNode.GetPrimaryKeyValue()
-                        && seed.GetToId() == toNodeKey);
-
-                    if (!nodeEdgeSeeds.Any())
-                        continue;
-
-                    // should only be one, log if more than one
-                    if (nodeEdgeSeeds.Count > 1)
-                    {
-                        logger.LogWarning("Multiple ({count}) edge seeds found for {fromNode}-{toNode} on relationship {relationship}. Using first.",
-                            nodeEdgeSeeds.Count, fromNode.GetPrimaryKeyValue(), toNodeKey, relationshipName);
-                    }
-
-                    var matchingEdge = nodeEdgeSeeds.First();
-
-                    var edgeParameters = new Dictionary<string, object?>();
-                    // create setClause and parameters for edge properties
-                    var edgeType = matchingEdge.GetType();
-                    var setClauses = new List<string>();
-                    foreach (var prop in edgeType.GetProperties())
-                    {
-                        if (prop.Name.Equals("FromId") || prop.Name.Equals("ToId"))
-                            continue; // skip these
-                        if (Attribute.IsDefined(prop, typeof(EdgePropertyIgnoreAttribute)))
-                            continue;
-                        var propValue = prop.GetValue(matchingEdge);
-                        edgeParameters[prop.Name] = propValue;
-                        setClauses.Add($"rel.{prop.Name} = ${prop.Name}");
-                    }
-
-                    var setClause = setClauses.Count > 0 
-                        ? "SET " + string.Join(", ", setClauses) 
-                        : string.Empty;
-
-                    await ExecuteCreateRelationshipsAsync(fromNode,
-                        session,
-                        relatedNodeType,
-                        relationshipName,
-                        toNodeKey,
-                        relatedNodeTypeName, edgeParameters, setClause);
-                }
-            }
-            return true;
-        }
-
-        private async Task ExecuteCreateRelationshipsAsync<T>(T fromNode, IAsyncSession session, Type relatedNodeType, string relationshipName, 
-            string toNodeKey, string relatedNodeTypeName, Dictionary<string, object?> parameters, string setClause = "") where T : GraphNode
-        {
-            // Determine PK name for the related type (fallback to "Id" if type cannot be constructed)
-            var pkName = "Id";
-            try
-            {
-                if (Activator.CreateInstance(relatedNodeType) is GraphNode tempInstance)
-                    pkName = tempInstance.GetPrimaryKeyName();
-            }
-            catch { /* ignore and use default */ }
-
-            logger.LogInformation("(:{node} {from})-[{relationship}]->{to}", fromNode.LabelName, fromNode.GetPrimaryKeyValue(), relationshipName, toNodeKey);
-            
-            parameters.Add("fromKey", fromNode.GetPrimaryKeyValue());
-            parameters.Add("toKey", toNodeKey);
-
-            var query =
-                $$"""
-                  MATCH (from:{{fromNode.LabelName}} {{{fromNode.GetPrimaryKeyName()}}: $fromKey})
-                  MATCH (to:{{relatedNodeTypeName}} {{{pkName}}: $toKey})
-                  MERGE (from)-[rel:{{relationshipName}}]->(to)
-                  {{setClause}}
-                  """;
-            await ExecuteWriteQuery(session, query, parameters);
-        }
-
-
-        public async Task<bool> EnforceUniqueConstraints(IEnumerable<INodeService> nodeServices)
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            foreach (var nodeService in nodeServices)
-            {
-                if (!nodeService.EnforceUniqueConstraint)
-                    continue;
-
-                var type = nodeService.GetType();
-
-                // Get the base type (e.g FileNodeService<Movie>)
-                var baseType = type.BaseType;
-                if (baseType == null || !baseType.IsGenericType)
-                    continue;
-                var genericType = baseType.GetGenericArguments()[0]; // e.g. typeof(Movie)
-                if (Activator.CreateInstance(genericType) is GraphNode instance)
-                {
-                    var query = GetUniqueConstraintCypher(instance);
-                    await ExecuteWriteQuery(session, query);
-                }
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// Allows for multiple nodes having embeddings and vector indexes,
-        /// however one is usually better when searching for semantic meaning across all data.
-        /// </summary>
-        /// <remarks>the nodes must have an "embedding" property.
-        /// note: defaults to 3072 dimensions (for text-embedding-3-large).</remarks>
-        public async Task<bool> CreateVectorIndexForEmbeddings(IList<string>? labelNames = null, int dimensions = 3072)
-        {
-            if (labelNames is null || !labelNames.Any())
-                return true;
-
-            /*
-             * text-embedding-3-large | 3072 dimensions
-             * text-embedding-ada-002 | 1536 dimensions
-             * Important: If the embedding model changes, the index MUST be dropped and rebuilt!
-             *
-             * todo: auto set the dimensions based on the embedding model (used in AI layer)
-             */
-
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            await using var session = neo4jDriver.AsyncSession();
-            try
-            {
-                var cypherTemplate = await GetCypherFromFile("CreateVectorIndexForEmbeddings.cypher", logger);
-                foreach (var labelName in labelNames)
-                {
-                    var cypher = cypherTemplate
-                        .Replace("{labelName}", labelName.ToLower())
-                        .Replace("{dimensions}", dimensions.ToString());
-                    await ExecuteWriteQuery(session, cypher);
-                }
-
-                sw.Stop();
-                logger.LogInformation("CreateVectorIndexForEmbeddings completed in {ElapsedMs}ms for {LabelCount} labels", sw.ElapsedMilliseconds, labelNames.Count);
-                return true;
-            }
-            catch (Exception)
-            {
-                // catch and continue, will have been logged in ExecuteWriteQuery
-                return false;
-            }
-        }
-
-        public async Task<IEnumerable<string>> ExecuteReadListStringsAsync(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            try
-            {
-                parameters ??= new Dictionary<string, object>();
-
-                var result = await session.ExecuteReadAsync(async tx =>
-                {
-                    var records = await RunReadQueryValidateAlias(tx, query, parameters, returnObjectKey);
-                    if (records.Count == 0)
-                        return [];
-
-                    // Assuming the returned value is a list of objects (like ["a", "b", "c"])
-                    var list = records
-                        .SelectMany(x => x[returnObjectKey].As<List<string>>())
-                        .Distinct()
-                        .ToList();
-                    return list;
-                });
-
-                return result;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Problem executing read list of strings. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length,
-                    string.Join(',', parameters?.Keys ?? Array.Empty<string>()));
-                throw new RepositoryException("Read list (string) query failed.", query, parameters?.Keys ?? Array.Empty<string>(), ex);
-            }
-        }
-
-        public async Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query,
-            string returnObjectKey, IDictionary<string, object>? parameters = null)
-            where T : class, new()
-        {
-            // Maintains existing API while improving memory profile (no ToListAsync full materialization) and using compiled mapper
-            await using var session = neo4jDriver.AsyncSession();
-            return await ExecuteReadListAsync<T>(query, returnObjectKey, session, parameters);
-        }
-
-        public async Task<IEnumerable<T>> ExecuteReadListAsync<T>(string query,
-            string returnObjectKey, IAsyncSession session, IDictionary<string, object>? parameters = null)
-            where T : class, new()
-        {
-            try
-            {
-                parameters ??= new Dictionary<string, object>();
-
-                var result = await session.ExecuteReadAsync(async tx =>
-                {
-                    var cursor = await tx.RunAsync(query, parameters);
-                    var list = new List<T>();
-                    var aliasValidated = false;
-                    var idProp = typeof(T).GetProperties()
-                        .FirstOrDefault(p => string.Equals(p.Name, "Id", StringComparison.OrdinalIgnoreCase) && p.GetMethod != null);
-                    var seen = idProp != null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
-
-                    while (await cursor.FetchAsync())
-                    {
-                        var record = cursor.Current;
-                        if (!aliasValidated)
-                        {
-                            if (!record.Keys.Contains(returnObjectKey))
-                            {
-                                var available = string.Join(", ", record.Keys);
-                                throw new KeyNotFoundException(
-                                    $"Return alias '{returnObjectKey}' not found. Available aliases: {available}. Ensure your Cypher uses 'RETURN <expr> AS {returnObjectKey}'. Query={query}");
-                            }
-
-                            aliasValidated = true;
-                        }
-
-                        var node = record[returnObjectKey].As<INode>();
-                        var obj = MapNodeToObject<T>(node); // uses compiled mapper internally
-                        if (seen != null)
-                        {
-                            var valObj = idProp!.GetValue(obj);
-                            var key = valObj?.ToString() ?? string.Empty;
-                            if (key.Length > 0 && !seen.Add(key))
-                                continue; // skip duplicate
-                        }
-
-                        list.Add(obj);
-                    }
-
-                    return list;
-                });
-
-                return result;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Problem executing read list. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters?.Keys ?? Array.Empty<string>()));
-                throw new RepositoryException("Read list query failed.", query, parameters?.Keys ?? Array.Empty<string>(), ex);
-            }
-        }
-
-        public async IAsyncEnumerable<T> ExecuteReadStreamAsync<T>(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
-            where T : class, new()
-        {
-            // WARNING: If the consumer does not fully enumerate the stream, the session may not be disposed promptly.
-            // Use 'await using' to ensure session disposal and prevent memory leaks.
-            parameters ??= new Dictionary<string, object>();
-            await using var session = neo4jDriver.AsyncSession();
-            IResultCursor? cursor = null;
-            try
-            {
-                cursor = await session.RunAsync(query, parameters);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Problem starting streamed read. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters.Keys));
-                throw new RepositoryException("Read stream query failed (initialization).", query, parameters.Keys, ex);
-            }
-
-            var aliasValidated = false;
-            while (await cursor.FetchAsync())
-            {
-                var record = cursor.Current;
-                if (!aliasValidated)
-                {
-                    if (!record.Keys.Contains(returnObjectKey))
-                    {
-                        var available = string.Join(", ", record.Keys);
-                        throw new KeyNotFoundException(
-                            $"Return alias '{returnObjectKey}' not found. Available aliases: {available}. Ensure your Cypher uses 'RETURN <expr> AS {returnObjectKey}'. Query={query}");
-                    }
-
-                    aliasValidated = true;
-                }
-
-                var node = record[returnObjectKey].As<INode>();
-                yield return MapNodeToObject<T>(node);
-            }
-        }
+        #region Read Query Helpers
 
         /// <summary>
         /// Runs a read query within a transaction, materializes all records and validates the presence of the expected return alias.
@@ -1686,9 +676,12 @@ namespace Neo4jLiteRepo
             return records;
         }
 
+        #endregion
+
+        #region Node Mapping
+
         // Compiled mapper cache for hot paths (reduces per-record reflection cost)
         private static readonly ConcurrentDictionary<Type, Delegate> _compiledNodeMappers = new();
-        private static readonly Regex _labelValidationRegex = new("^[A-Za-z0-9_]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         private T MapNodeToObject<T>(INode node) where T : class
         {
@@ -1786,7 +779,7 @@ namespace Neo4jLiteRepo
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Error processing property {PropertyName}", prop.Name);
+                    _logger.LogError(ex, "Error processing property {PropertyName}", prop.Name);
                 }
             }
 
@@ -1794,8 +787,6 @@ namespace Neo4jLiteRepo
             var body = Expression.Block([objVar, valueVar], blockExpressions);
             return Expression.Lambda<Func<INode, T>>(body, nodeParam).Compile();
         }
-
-
 
         // Helper to obtain properties dictionary robustly across potential driver differences.
         private static IReadOnlyDictionary<string, object> GetNodePropertiesDictionary(INode node)
@@ -1839,32 +830,7 @@ namespace Neo4jLiteRepo
             return new Dictionary<string, object>();
         }
 
-        /// <summary>
-        /// Execute read scalar as an asynchronous operation.
-        /// </summary>
-        /// <remarks>untested - 20250424</remarks>
-        public async Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null)
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            try
-            {
-                parameters = parameters ?? new Dictionary<string, object>();
-
-                var result = await session.ExecuteReadAsync(async tx =>
-                {
-                    var cursor = await tx.RunAsync(query, parameters);
-                    var scalar = (await cursor.SingleAsync())[0].As<T>();
-                    return scalar;
-                });
-
-                return result;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Problem executing scalar read. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters?.Keys ?? Array.Empty<string>()));
-                throw new RepositoryException("Read scalar query failed.", query, parameters?.Keys ?? Array.Empty<string>(), ex);
-            }
-        }
+        #endregion
 
         #region Relationship Loading Helpers
 
@@ -1934,7 +900,6 @@ namespace Neo4jLiteRepo
 
             return metas;
         }
-
 
         /// <summary>
         /// Builds a single Cypher query to load node(s) and aggregate id lists, with optional edge-object maps via pattern comprehensions.
@@ -2056,7 +1021,7 @@ namespace Neo4jLiteRepo
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "Failed mapping relationship list for {Type}.{Prop}", typeof(T).Name, r.Property.Name);
+                    _logger.LogWarning(ex, "Failed mapping relationship list for {Type}.{Prop}", typeof(T).Name, r.Property.Name);
                 }
             }
         }
@@ -2205,725 +1170,7 @@ namespace Neo4jLiteRepo
 
         #endregion
 
-        public async Task<T?> LoadAsync<T>(string id, CancellationToken ct = default) where T : GraphNode, new()
-        {
-            ct.ThrowIfCancellationRequested();
-            if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("id required", nameof(id));
-
-            var temp = new T();
-            var label = temp.LabelName;
-            var pkName = temp.GetPrimaryKeyName();
-
-            var relationships = GetRelationshipMetadata(typeof(T));
-            var query = BuildLoadQuery(label, pkName, relationships, $"{{ {pkName}: $id }}", null, null, false, null);
-
-            await using var session = neo4jDriver.AsyncSession();
-            try
-            {
-                var records = await session.ExecuteReadAsync(async tx =>
-                {
-                    var cursor = await tx.RunAsync(query, new { id });
-                    return await cursor.ToListAsync(cancellationToken: ct);
-                });
-
-                if (records.Count == 0) return null;
-                var record = records[0];
-                if (!record.Keys.Contains("n"))
-                    throw new RepositoryException("Load query did not return alias 'n'.", query, ["id"], null);
-
-                var node = record["n"].As<INode>();
-                var entity = MapNodeToObject<T>(node);
-                MapRelationshipLists(record, entity, relationships);
-                // Edge objects disabled in this overload to preserve existing behavior.
-                return entity;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Failed loading node {Label}:{Id}", label, id);
-                throw new RepositoryException($"Failed loading node {label}:{id}", query, ["id"], ex);
-            }
-        }
-
-        /// <summary>
-        /// Loads all nodes of a given type and populates outgoing relationship List&lt;string&gt; properties defined with <see cref="NodeRelationshipAttribute{T}"/>.
-        /// Only related node primary key values are populated (not full node objects) to keep the load lightweight.
-        /// </summary>
-        /// <typeparam name="T">Concrete GraphNode type to load.</typeparam>
-        /// <param name="ct">Cancellation token.</param>
-        public async Task<IReadOnlyList<T>> LoadAllAsync<T>(CancellationToken ct = default) where T : GraphNode, new()
-        {
-            return await LoadAllAsync<T>(0, int.MaxValue, ct);
-        }
-
-        /// <summary>
-        /// Loads all nodes of a given type and populates outgoing relationship List&lt;string&gt; properties defined with <see cref="NodeRelationshipAttribute{T}"/>.
-        /// Only related node primary key values are populated (not full node objects) to keep the load lightweight.
-        /// Supports pagination via skip/take.
-        /// </summary>
-        /// <typeparam name="T">Concrete GraphNode type to load.</typeparam>
-        /// <param name="skip">Number of records to skip (for pagination).</param>
-        /// <param name="take">Maximum number of records to take (for pagination).</param>
-        /// <param name="ct">Cancellation token.</param>
-        public async Task<IReadOnlyList<T>> LoadAllAsync<T>(int skip, int take, CancellationToken ct = default) where T : GraphNode, new()
-        {
-            ct.ThrowIfCancellationRequested();
-            var temp = new T();
-            var label = temp.LabelName;
-            var pkName = temp.GetPrimaryKeyName();
-            var relationships = GetRelationshipMetadata(typeof(T));
-
-            var query = BuildLoadQuery(label, pkName, relationships, null, skip, take, false, null);
-
-            var parameters = new Dictionary<string, object>();
-            if (query.Contains("$skip")) parameters["skip"] = skip;
-            if (query.Contains("$take")) parameters["take"] = take;
-
-            await using var session = neo4jDriver.AsyncSession();
-            try
-            {
-                var records = await session.ExecuteReadAsync(async tx =>
-                {
-                    var cursor = await tx.RunAsync(query, parameters);
-                    return await cursor.ToListAsync(cancellationToken: ct);
-                });
-
-                if (records.Count == 0) return Array.Empty<T>();
-                var results = new List<T>(records.Count);
-
-                foreach (var record in records)
-                {
-                    if (!record.Keys.Contains("n")) continue;
-                    var node = record["n"].As<INode>();
-                    var entity = MapNodeToObject<T>(node);
-                    MapRelationshipLists(record, entity, relationships);
-                    // Edge objects disabled in this overload to preserve existing behavior.
-                    results.Add(entity);
-                }
-
-                return results;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Failed loading all nodes for {Label}", label);
-                throw new RepositoryException($"Failed loading all nodes for {label}", query, Array.Empty<string>(), ex);
-            }
-        }
-
-        /// <summary>
-        /// Loads a single node of the specified type by its primary key, also populates outgoing relationship List&lt;string&gt; properties.
-        /// Opt in to load edge-object maps for relationships that have an associated edge object type.
-        /// </summary>
-        public async Task<T?> LoadAsync<T>(string id, bool includeEdgeObjects, IEnumerable<string>? includeEdges, CancellationToken ct = default)
-            where T : GraphNode, new()
-        {
-            ct.ThrowIfCancellationRequested();
-            if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("id required", nameof(id));
-
-            var temp = new T();
-            var label = temp.LabelName;
-            var pkName = temp.GetPrimaryKeyName();
-
-            var rels = GetRelationshipMetadata(typeof(T));
-            var includeSet = includeEdges != null ? new HashSet<string>(includeEdges, StringComparer.OrdinalIgnoreCase) : null;
-
-            var query = BuildLoadQuery(label, pkName, rels, $"{{ {pkName}: $id }}", null, null, includeEdgeObjects, includeSet);
-
-            await using var session = neo4jDriver.AsyncSession();
-            try
-            {
-                var records = await session.ExecuteReadAsync(async tx =>
-                {
-                    var cursor = await tx.RunAsync(query, new { id });
-                    return await cursor.ToListAsync(cancellationToken: ct);
-                });
-
-                if (records.Count == 0) return null;
-                var record = records[0];
-                var node = record["n"].As<INode>();
-                var entity = MapNodeToObject<T>(node);
-                MapRelationshipLists(record, entity, rels);
-                if (includeEdgeObjects)
-                    MapEdgeObjects(record, entity, rels);
-                return entity;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Failed loading node {Label}:{Id}", label, id);
-                throw;
-            }
-        }
-
-        public async Task<IReadOnlyList<T>> LoadAllAsync<T>(int skip, int take, bool includeEdgeObjects, IEnumerable<string>? includeEdges, CancellationToken ct = default)
-            where T : GraphNode, new()
-        {
-            ct.ThrowIfCancellationRequested();
-            var temp = new T();
-            var label = temp.LabelName;
-            var pkName = temp.GetPrimaryKeyName();
-
-            var rels = GetRelationshipMetadata(typeof(T));
-            var includeSet = includeEdges != null ? new HashSet<string>(includeEdges, StringComparer.OrdinalIgnoreCase) : null;
-
-            var query = BuildLoadQuery(label, pkName, rels, null, skip, take, includeEdgeObjects, includeSet);
-
-            var parameters = new Dictionary<string, object>();
-            if (query.Contains("$skip")) parameters["skip"] = skip;
-            if (query.Contains("$take")) parameters["take"] = take;
-
-            await using var session = neo4jDriver.AsyncSession();
-            try
-            {
-                var records = await session.ExecuteReadAsync(async tx =>
-                {
-                    var cursor = await tx.RunAsync(query, parameters);
-                    return await cursor.ToListAsync(cancellationToken: ct);
-                });
-
-                if (records.Count == 0) return Array.Empty<T>();
-                var results = new List<T>(records.Count);
-
-                foreach (var record in records)
-                {
-                    if (!record.Keys.Contains("n")) continue;
-                    var node = record["n"].As<INode>();
-                    var entity = MapNodeToObject<T>(node);
-                    MapRelationshipLists(record, entity, rels);
-                    if (includeEdgeObjects)
-                        MapEdgeObjects(record, entity, rels);
-                    results.Add(entity);
-                }
-
-                return results;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Failed loading all nodes for {Label}", label);
-                throw;
-            }
-        }
-        /// <summary>
-        /// Generic helper to traverse from a source node to related nodes through a set of relationship types
-        /// using a variable length path and return the distinct related nodes mapped to the requested type.
-        /// </summary>
-        /// <remarks>
-        /// Cypher pattern generated:
-        /// MATCH (s:SourceLabel { pk: $id })-[:REL1|REL2*min..max]->(t:TargetLabel)
-        /// RETURN DISTINCT t AS node
-        /// Validation enforces simple safe relationship tokens (alphanumeric & underscore). Relationship names are
-        /// upper‑cased to align with existing conventions (see ToGraphRelationShipCasing). Designed for read paths only.
-        /// </remarks>
-        public async Task<IReadOnlyList<TRelated>> LoadRelatedNodesAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4, IAsyncTransaction? tx = null,
-            CancellationToken ct = default)
-            where TSource : GraphNode, new()
-            where TRelated : GraphNode, new()
-        {
-            ct.ThrowIfCancellationRequested();
-            if (string.IsNullOrWhiteSpace(sourceId)) throw new ArgumentException("sourceId required", nameof(sourceId));
-            if (string.IsNullOrWhiteSpace(relationshipTypes)) throw new ArgumentException("relationshipTypes required", nameof(relationshipTypes));
-            if (minHops < 0) throw new ArgumentOutOfRangeException(nameof(minHops), "minHops cannot be negative");
-            if (maxHops < minHops) throw new ArgumentOutOfRangeException(nameof(maxHops), "maxHops must be >= minHops");
-            if (maxHops > 10) throw new ArgumentOutOfRangeException(nameof(maxHops), "maxHops > 10 likely indicates an inefficient query");
-
-            var sourceTemp = new TSource();
-            var sourceLabel = sourceTemp.LabelName;
-            var sourcePk = sourceTemp.GetPrimaryKeyName();
-            var targetLabel = typeof(TRelated).Name.ToPascalCase();
-
-            var relTokens = relationshipTypes.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (relTokens.Length == 0) throw new ArgumentException("No valid relationship tokens provided", nameof(relationshipTypes));
-            foreach (var r in relTokens)
-            {
-                if (!_labelValidationRegex.IsMatch(r))
-                    throw new ArgumentException($"Invalid relationship token '{r}'. Only A-Z, a-z, 0-9 and '_' allowed.", nameof(relationshipTypes));
-            }
-
-            var relPattern = string.Join('|', relTokens.Select(t => t.ToGraphRelationShipCasing()));
-            var query = $$"""
-                          MATCH (s:{{sourceLabel}} { {{sourcePk}}: $id })
-                            -[:{{relPattern}}*{{minHops}}..{{maxHops}}]->
-                            (t:{{targetLabel}})
-                          RETURN DISTINCT t AS node
-                          """;
-            var parameters = new Dictionary<string, object> { { "id", sourceId } };
-
-            return await ExecuteReadNodeQueryAsync<TRelated>(query, parameters, "node", tx, ct);
-        }
-
-        /// <summary>
-        /// Reusable internal helper to execute a read query expected to return a single node per record
-        /// (under a specified alias) and map results to <typeparamref name="T"/> using the compiled mapper.
-        /// Distinct filtering by Id (if present) is applied client-side. Intended for lightweight list lookups.
-        /// </summary>
-        /// <typeparam name="T">Graph node type to materialize.</typeparam>
-        /// <param name="query">Cypher query text.</param>
-        /// <param name="parameters">Query parameters (nullable -> empty).</param>
-        /// <param name="returnAlias">Alias of the node in the RETURN clause (default 'node').</param>
-        /// <param name="runner">Optional existing transaction/session runner; if null a temp session is created.</param>
-        /// <param name="ct">Cancellation token.</param>
-        private async Task<IReadOnlyList<T>> ExecuteReadNodeQueryAsync<T>(string query, IDictionary<string, object>? parameters, string returnAlias, IAsyncQueryRunner? runner, CancellationToken ct)
-            where T : GraphNode
-        {
-            parameters ??= new Dictionary<string, object>();
-
-            async Task<IReadOnlyList<T>> InnerAsync(IAsyncQueryRunner r)
-            {
-                try
-                {
-                    var cursor = await r.RunAsync(query, parameters);
-                    var list = new List<T>();
-                    while (await cursor.FetchAsync())
-                    {
-                        var record = cursor.Current;
-                        if (!record.Keys.Contains(returnAlias)) continue;
-                        var node = record[returnAlias].As<INode>();
-                        var mapped = MapNodeToObject<T>(node);
-                        list.Add(mapped);
-                    }
-
-                    var idProp = typeof(T).GetProperty("Id", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                    if (idProp != null)
-                    {
-                        list = list
-                            .GroupBy(o => idProp.GetValue(o)?.ToString(), StringComparer.OrdinalIgnoreCase)
-                            .Select(g => g.First())
-                            .ToList();
-                    }
-
-                    return list;
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    logger.LogError(ex, "ExecuteReadNodeQueryAsync failure. Alias={Alias} QueryLength={QueryLength}", returnAlias, query.Length);
-                    throw new RepositoryException("Failed executing node list read.", query, parameters.Keys, ex);
-                }
-            }
-
-            if (runner != null)
-            {
-                return await InnerAsync(runner);
-            }
-
-            await using var session = neo4jDriver.AsyncSession();
-            return await session.ExecuteReadAsync(async tx => await InnerAsync(tx));
-        }
-
-        /// <summary>
-        /// Lightweight variant that returns only the distinct id values of related nodes rather than hydrating full node objects.
-        /// Supports traversing outgoing, incoming or undirected (both) relationships.
-        /// </summary>
-        public async Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
-            EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
-            where TRelated : GraphNode, new()
-        {
-            ct.ThrowIfCancellationRequested();
-            if (fromNode == null) throw new ArgumentException("from node required", "fromNode");
-            if (string.IsNullOrWhiteSpace(relationshipTypes)) throw new ArgumentException("relationshipTypes required", nameof(relationshipTypes));
-            if (minHops < 0) throw new ArgumentOutOfRangeException(nameof(minHops), "minHops cannot be negative");
-            if (maxHops < minHops) throw new ArgumentOutOfRangeException(nameof(maxHops), "maxHops must be >= minHops");
-            if (maxHops > 10) throw new ArgumentOutOfRangeException(nameof(maxHops), "maxHops > 10 likely indicates an inefficient query");
-
-            var fromPkValue = fromNode.GetPrimaryKeyValue();
-            var fromPkName = fromNode.GetPrimaryKeyName();
-
-            var targetTemp = new TRelated();
-            var targetLabel = targetTemp.LabelName; // use LabelName to honor overrides
-            var targetPk = targetTemp.GetPrimaryKeyName();
-
-            var relTokens = relationshipTypes.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (relTokens.Length == 0) throw new ArgumentException("No valid relationship tokens provided", nameof(relationshipTypes));
-            foreach (var r in relTokens)
-            {
-                if (!_labelValidationRegex.IsMatch(r))
-                    throw new ArgumentException($"Invalid relationship token '{r}'. Only A-Z, a-z, 0-9 and '_' allowed.", nameof(relationshipTypes));
-            }
-
-            var relPattern = string.Join('|', relTokens.Select(t => t.ToGraphRelationShipCasing()));
-
-            var dirPattern = direction switch
-            {
-                EdgeDirection.Outgoing => $"-[:{relPattern}*{minHops}..{maxHops}]->",
-                EdgeDirection.Incoming => $"<-[:{relPattern}*{minHops}..{maxHops}]-",
-                EdgeDirection.Both => $"-[:{relPattern}*{minHops}..{maxHops}]-",
-                _ => throw new ArgumentException($"Invalid direction {direction}")
-            };
-
-            var query = $$"""
-                          MATCH (s:{{fromNode.LabelName}} { {{fromPkName}}: $fromPkValue }){{dirPattern}}(t:{{targetLabel}})
-                          RETURN DISTINCT t.{{targetPk}} AS id
-                          """; // note using id alias for simplicity - this doesn't mean the property has to be 'id'
-
-            var parameters = new Dictionary<string, object>
-            {
-                { "fromPkValue", fromPkValue }
-            };
-
-            async Task<IReadOnlyList<string>> ExecAsync(IAsyncQueryRunner runner)
-            {
-                try
-                {
-                    var cursor = await runner.RunAsync(query, parameters);
-                    var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    while (await cursor.FetchAsync())
-                    {
-                        if (!cursor.Current.Keys.Contains("id")) continue;
-                        var val = cursor.Current["id"].As<string?>();
-                        if (!string.IsNullOrWhiteSpace(val)) set.Add(val!);
-                    }
-
-                    return set.ToList();
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    logger.LogError(ex, "LoadRelatedNodeIdsAsync failure. QueryLength={QueryLength}", query.Length);
-                    throw new RepositoryException("Failed executing related node id list read.", query, parameters.Keys, ex);
-                }
-            }
-
-            if (tx != null)
-            {
-                return await ExecAsync(tx);
-            }
-
-            await using var session = neo4jDriver.AsyncSession();
-            return await session.ExecuteReadAsync(async rtx => await ExecAsync(rtx));
-        }
-
-        /// <summary>
-        /// Enforces a unique constraint on a node
-        /// </summary>
-        private string GetUniqueConstraintCypher<T>(T node) where T : GraphNode
-        {
-            logger.LogInformation("CREATE UNIQUE CONSTRAINT {node}", node.LabelName);
-            return $"""
-                    CREATE CONSTRAINT {node.LabelName.ToLower()}_{node.GetPrimaryKeyName().ToLower()}_is_unique IF NOT EXISTS
-                    FOR (n:{node.LabelName})
-                    REQUIRE n.{node.GetPrimaryKeyName()} IS UNIQUE
-                    """;
-        }
-        
-        /// <inheritdoc />
-        public async Task<string> GetGraphMapAsJsonAsync()
-        {
-            try
-            {
-                // Get current node types and relationships from the database
-                var graphStructure = await GetAllNodesAndEdgesAsync();
-
-                // Create a structured object with the graph information
-                var finalStructure = new
-                {
-                    GlobalProperties = new[] { "displayName", "upserted" },
-                    NodeTypes = graphStructure.NodeTypes.Select(n => new
-                    {
-                        Name = n.NodeType,
-                        OutgoingRelationships = n.OutgoingRelationships,
-                        IncomingRelationships = n.IncomingRelationships
-                    }).ToList()
-                };
-                // Serialize to JSON with minimal indentation
-                var result = JsonSerializer.Serialize(finalStructure, new JsonSerializerOptions
-                {
-                    WriteIndented = false
-                });
-
-                return result;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "GetGraphDbNodesAndEdgesJsonAsync");
-
-                // default to a minimal structure
-                var structure = $$""" 
-                                  {
-                                      "GlobalProperties": [ "displayName", "upserted" ],
-                                      "NodeTypes": [ ]
-                                  }
-                                  """;
-                // Serialize to JSON with minimal indentation
-                var result = JsonSerializer.Serialize(structure, new JsonSerializerOptions
-                {
-                    WriteIndented = false
-                });
-
-                return result;
-            }
-        }
-
-        /// <summary>
-        /// Get a list of the names of all labels (node types) and their edges (in and out).
-        /// Not any node data, just the types and relationships.
-        /// </summary>
-        /// <remarks>Ensure the session is appropriately disposed of! Caller Responsibility.</remarks>
-        /// <returns>Useful if you want to feed your graph map into AI</returns>
-        public async Task<NodeRelationshipsResponse> GetAllNodesAndEdgesAsync()
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            return await GetAllNodesAndEdgesAsync(session);
-        }
-
-        /// <summary>
-        /// Get a list of the names of all labels (node types) and their edges (in and out).
-        /// Not any node data, just the types and relationships.
-        /// </summary>
-        /// <remarks>Ensure the session is appropriately disposed of! Caller Responsibility.</remarks>
-        /// <returns>Useful if you want to feed your graph map into AI</returns>
-        public async Task<NodeRelationshipsResponse> GetAllNodesAndEdgesAsync(IAsyncSession session)
-        {
-            if (session == null) throw new ArgumentNullException(nameof(session));
-            // why exclude? I pass the result into AI to help it gen cypher. If a rel exists on many NodeType's, to minimize noise (and cost) I pass this instead: 
-            // example: "GlobalOutgoingRelationships": ["IN_GROUP"]
-            var excludedOutRelationships = config.GetSection("Neo4jLiteRepo:GetNodesAndRelationships:excludedOutRelationships")
-                .Get<List<string>>() ?? [];
-            var excludedInRelationships = config.GetSection("Neo4jLiteRepo:GetNodesAndRelationships:excludedInRelationships")
-                .Get<List<string>>() ?? [];
-
-            // Create a parameters dictionary
-            var parameters = new Dictionary<string, object>
-            {
-                { "excludedOutRels", excludedOutRelationships },
-                { "excludedInRels", excludedInRelationships }
-            };
-
-            var query = await GetCypherFromFile("GetAllNodesAndRelationships.cypher", logger);
-
-            IResultCursor cursor;
-            try
-            {
-                cursor = await session.RunAsync(query, parameters);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Problem running GetNodesAndRelationships query. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters.Keys));
-                throw new RepositoryException("Get nodes and relationships failed.", query, parameters.Keys, ex);
-            }
-
-            try
-            {
-                var records = await cursor.ToListAsync();
-                var response = new NodeRelationshipsResponse
-                {
-                    QueriedAt = DateTime.UtcNow,
-                    NodeTypes = records.Select(record => new NodeRelationshipInfo
-                    {
-                        NodeType = record["NodeType"].As<string>(),
-                        OutgoingRelationships = record["OutgoingRelationships"].As<List<string>>(),
-                        IncomingRelationships = record["IncomingRelationships"].As<List<string>>()
-                    }).ToList()
-                };
-                return response;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Problem materializing records for GetNodesAndRelationships. QueryLength={QueryLength}", query.Length);
-                throw new RepositoryException("Get nodes and relationships materialization failed.", query, parameters.Keys, ex);
-            }
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await neo4jDriver.DisposeAsync();
-        }
-
-        /// <summary>
-        /// Executes a vector similarity search query to find relevant content chunks
-        /// </summary>
-        /// <param name="questionEmbedding">The embedding vector of the question</param>
-        /// <param name="topK">Number of most relevant chunks to return</param>
-        /// <param name="includeContext">Whether to include related chunks and parent context</param>
-        /// <param name="similarityThreshold">Minimum cosine similarity threshold (0-1) for matching content. 
-        /// Higher values (e.g. 0.8) will return only very close matches and may result in fewer results.
-        /// Lower values (e.g. 0.5) will return more results but may include less relevant content.
-        /// Values between 0.6-0.75 are typically a good starting point.</param>
-        /// <returns>A list of strings containing the content and article information</returns>
-        public async Task<List<string>> ExecuteVectorSimilaritySearchAsync(
-            float[] questionEmbedding,
-            int topK = 20,
-            bool includeContext = true,
-            double similarityThreshold = 0.65)
-        {
-            var query = await GetCypherFromFile("ExecuteVectorSimilaritySearch.cypher", logger);
-
-            await using var session = neo4jDriver.AsyncSession();
-            List<string> result;
-            try
-            {
-                result = await session.ExecuteReadAsync(async tx =>
-                {
-                    // Run the query
-                    var cursor = await tx.RunAsync(query, new
-                    {
-                        questionEmbedding,
-                        topK,
-                        similarityThreshold
-                    });
-
-                    // Process results
-                    var resultsDict = new Dictionary<string, Dictionary<string, object>>();
-
-                    await foreach (var record in cursor)
-                    {
-                        var id = record["id"].As<string>();
-
-                        // If we've already seen this chunk, skip it (avoid duplicates)
-                        if (resultsDict.ContainsKey(id))
-                            continue;
-
-                        resultsDict[id] = new Dictionary<string, object>
-                        {
-                            ["id"] = id,
-                            ["content"] = record["content"].As<string>(),
-                            ["articleTitle"] = record["articleTitle"].As<string>(),
-                            ["articleUrl"] = record["articleUrl"].As<string>(),
-                            ["score"] = record["score"].As<double>(),
-                            ["entities"] = record["entities"].As<List<string>>(),
-                            ["sequence"] = record["sequence"].As<int>(),
-                            ["resultType"] = record["resultType"].As<string>()
-                        };
-                    }
-
-                    // Sort by article title and sequence order for better readability
-                    var sortedResults = resultsDict.Values
-                        .OrderBy(r => r["articleTitle"].ToString())
-                        .ThenBy(r => (int)r["sequence"])
-                        .ToList();
-
-                    // Format results to return
-                    var formattedResults = new List<string>();
-
-                    var currentArticle = "";
-                    foreach (var r in sortedResults)
-                    {
-                        var articleTitle = r["articleTitle"]?.ToString() ?? "Unknown Article";
-                        var articleUrl = r["articleUrl"]?.ToString() ?? "no-link";
-
-                        // If we're starting a new article, add a header
-                        if (articleTitle != currentArticle)
-                        {
-                            if (formattedResults.Count > 0)
-                                formattedResults.Add($"-- end article: {currentArticle} --"); // Add a clear delimiter between articles for LLM context
-
-                            formattedResults.Add($"-- start article: {articleTitle} --");
-                            formattedResults.Add($"article url: {articleUrl}");
-                            currentArticle = articleTitle;
-                        }
-
-                        // Add content with prefix based on result type
-                        var prefix = "";
-                        var resultType = r["resultType"]?.ToString() ?? "unknown";
-
-                        if (resultType == "main")
-                            prefix = "▶️ "; // Highlight the main matches
-                        else if (resultType == "next")
-                            prefix = "⏩ "; // Context that follows
-                        else if (resultType == "previous")
-                            prefix = "⏪ "; // Context that precedes
-                        else if (resultType == "sibling")
-                            prefix = "🔄 "; // Related content
-                        else if (resultType == "section_related")
-                            prefix = "📑 "; // Section-related content
-                        else if (resultType == "subsection_related")
-                            prefix = "📋 "; // SubSection-related content
-
-                        var entities = r["entities"] as List<string> ?? new List<string>();
-                        var entityInfo = entities.Any() ? $" [Entities: {string.Join(", ", entities)}]" : "";
-
-                        var content = $"{prefix}{r["content"]}{entityInfo}";
-                        if (!formattedResults.Contains(content) && !string.IsNullOrWhiteSpace(content))
-                            formattedResults.Add(content);
-                    }
-
-                    return formattedResults;
-                });
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Vector similarity search failed. QueryLength={QueryLength} ParamKeys=questionEmbedding,topK", query.Length);
-                throw new RepositoryException("Vector similarity search failed.", query, ["questionEmbedding", "topK"], ex);
-            }
-
-            return result;
-        }
-
-        /// <inheritdoc />
-        public async Task<int> RemoveOrphansAsync<T>(CancellationToken ct = default) where T : GraphNode, new()
-        {
-            await using var session = neo4jDriver.AsyncSession();
-            // Delegate to the session overload to keep all write orchestration logic centralized.
-            return await RemoveOrphansAsync<T>(session, ct);
-        }
-
-
-        /// <inheritdoc />
-        public async Task<int> RemoveOrphansAsync<T>(IAsyncSession session, CancellationToken ct = default) where T : GraphNode, new()
-        {
-            if (session == null) throw new ArgumentNullException(nameof(session));
-            await using var tx = await session.BeginTransactionAsync();
-            try
-            {
-                var result = await RemoveOrphansAsync<T>(tx, ct);
-                await tx.CommitAsync();
-                return result;
-            }
-            catch
-            {
-                try
-                {
-                    await tx.RollbackAsync();
-                }
-                catch
-                {
-                    /* ignore */
-                }
-
-                throw;
-            }
-        }
-
-        /// <inheritdoc />
-        public async Task<int> RemoveOrphansAsync<T>(IAsyncTransaction tx, CancellationToken ct = default) where T : GraphNode, new()
-        {
-            if (tx == null) throw new ArgumentNullException(nameof(tx));
-            var temp = new T();
-            var label = temp.LabelName;
-            ValidateLabel(label, nameof(label));
-
-            // Batch delete orphans to avoid memory spikes
-            const int batchSize = 400; // configurable if needed
-            var totalDeleted = 0;
-            var cypher = $$"""
-                           MATCH (n:{{label}}) WHERE NOT (n)--() WITH n LIMIT $batchSize DETACH DELETE n RETURN count(n) AS deleted
-                           """;
-
-
-            try
-            {
-                while (true)
-                {
-                    var cursor = await tx.RunAsync(cypher, new { batchSize });
-                    if (await cursor.FetchAsync())
-                    {
-                        var deleted = cursor.Current["deleted"].As<int>();
-                        totalDeleted += deleted;
-                        if (deleted < batchSize)
-                        {
-                            // Last batch, done
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-
-                return totalDeleted;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "RemoveOrphansAsync failure. QueryLength={QueryLength}", cypher.Length);
-                throw new RepositoryException("Failed removing orphans.", cypher, ["label"], ex);
-            }
-        }
+        #region Cypher File Loading
 
         /// <summary>
         /// Gets a Cypher query from a .cypher file in the Queries directory
@@ -2970,59 +1217,7 @@ namespace Neo4jLiteRepo
             }
         }
 
-        /// <summary>
-        /// Structured variant of vector similarity search. Returns a flat list of result rows with consistent fields.
-        /// </summary>
-        public async Task<IReadOnlyList<StructuredVectorSearchRow>> ExecuteVectorSimilaritySearchStructuredAsync(
-            float[] questionEmbedding,
-            int topK = 20,
-            double similarityThreshold = 0.65)
-        {
-            var query = await GetCypherFromFile("ExecuteVectorSimilaritySearchStructured.cypher", logger);
-            await using var session = neo4jDriver.AsyncSession();
-            try
-            {
-                var rows = await session.ExecuteReadAsync(async tx =>
-                {
-                    var cursor = await tx.RunAsync(query, new
-                    {
-                        questionEmbedding,
-                        topK,
-                        similarityThreshold
-                    });
-
-                    var list = new List<StructuredVectorSearchRow>();
-                    await foreach (var record in cursor)
-                    {
-                        try
-                        {
-                            list.Add(new StructuredVectorSearchRow
-                            {
-                                ChunkId = record["chunkId"].As<string>(),
-                                ArticleTitle = record["articleTitle"].As<string>(),
-                                ArticleUrl = record["articleUrl"].As<string>(),
-                                SnippetType = record["snippetType"].As<string>(),
-                                Content = record["content"].As<string>(),
-                                BaseScore = record["baseScore"].As<double>(),
-                                Sequence = record["sequence"].As<int>(),
-                                Entities = record["entities"].As<List<string>>()
-                            });
-                        }
-                        catch (Exception exInner)
-                        {
-                            logger.LogWarning(exInner, "Failed to materialize structured vector search row");
-                        }
-                    }
-                    return (IReadOnlyList<StructuredVectorSearchRow>)list;
-                });
-                return rows;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Structured vector similarity search failed. QueryLength={QueryLength} ParamKeys=questionEmbedding,topK", query.Length);
-                throw new RepositoryException("Structured vector similarity search failed.", query, ["questionEmbedding", "topK"], ex);
-            }
-        }
+        #endregion
     }
 }
 

@@ -1,6 +1,7 @@
 // First find the most semantically relevant chunks
 MATCH (c:ContentChunk)
 WHERE c.embedding IS NOT NULL
+ AND size(c.embedding) = size($questionEmbedding)
 WITH c, vector.similarity.cosine(c.embedding, $questionEmbedding) AS score
 WHERE score > 0.6
 ORDER BY score DESC                        
