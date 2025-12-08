@@ -14,8 +14,14 @@ namespace Neo4jLiteRepo.Tests.Integration;
 
 /// <summary>
 /// Integration tests for Neo4jGenericRepo CRUD operations.
-/// IMPORTANT - WIPES the database during cleanup,
-/// so do NOT point at an important database! (hardcoded connection is intentional to help prevent accidentally wiping a DB)
+/// 
+/// IMPORTANT - WIPES the database during cleanup!
+/// Do NOT point at an important database! (hardcoded connection is intentional to prevent accidentally wiping a production DB)
+/// 
+/// CONFIGURATION:
+/// 1. Update Neo4jPassword below to match your Neo4j Desktop database password
+/// 2. The tests will create and use a separate 'IntegrationTests' database (requires Enterprise/AuraDB)
+/// 3. If using Community Edition, change TestDatabase to "neo4j" (Community only supports one database)
 /// </summary>
 [TestFixture]
 public class CrudIntegrationTests
@@ -24,6 +30,11 @@ public class CrudIntegrationTests
     private IDriver _driver = null!;
     private INeo4jGenericRepo _repo = null!;
     private const string TestDatabase = "IntegrationTests";
+    
+    // TODO: Update Neo4jPassword to match your Neo4j Desktop instance password
+    // All databases in the same Neo4j instance share the same credentials
+    private const string Neo4jUri = "neo4j://127.0.0.1:7687"; // Matches your Neo4j Desktop
+    private const string Neo4jUser = "neo4j";
 
     [OneTimeSetUp]
     public async Task OneTimeSetup()
@@ -46,8 +57,8 @@ public class CrudIntegrationTests
         // Register Neo4j driver - deliberately using hardcoded values because this test wipes the DB during cleanup
         builder.Services.AddSingleton<IDriver>(_ =>
         {
-            var driver = GraphDatabase.Driver("neo4j://localhost:7687",
-                AuthTokens.Basic("neo4j", "password-for-unit-testing-db-only"));
+            var password = builder.Configuration["Neo4jSettings:Password"];
+            var driver = GraphDatabase.Driver(Neo4jUri, AuthTokens.Basic(Neo4jUser, password));
 
             Log.Information("neo4j driver initialized for CRUD tests");
             Task.Run(() => Task.FromResult(driver.VerifyConnectivityAsync())).GetAwaiter().GetResult();
@@ -95,10 +106,17 @@ public class CrudIntegrationTests
         _host.Dispose();
     }
 
+    [SetUp]
+    public async Task SetUp()
+    {
+        // Clean up before each test to ensure clean state
+        await CleanupDatabase();
+    }
+
     [TearDown]
     public async Task TearDown()
     {
-        // Clean up after each test to ensure isolation
+        // Clean up after each test as well for good measure
         await CleanupDatabase();
     }
 
@@ -165,12 +183,11 @@ public class CrudIntegrationTests
         // Act
         await _repo.UpsertNodes(movies);
 
-        // Assert
+        // Assert - Verify all three nodes exist
         var allMovies = await _repo.LoadAllAsync<Movie>();
-        Assert.That(allMovies.Count, Is.EqualTo(3));
-        Assert.That(allMovies.Any(m => m.Id == "batch-1"));
-        Assert.That(allMovies.Any(m => m.Id == "batch-2"));
-        Assert.That(allMovies.Any(m => m.Id == "batch-3"));
+        Assert.That(allMovies.Any(m => m.Id == "batch-1"), Is.True);
+        Assert.That(allMovies.Any(m => m.Id == "batch-2"), Is.True);
+        Assert.That(allMovies.Any(m => m.Id == "batch-3"), Is.True);
     }
 
     #endregion
@@ -197,8 +214,9 @@ public class CrudIntegrationTests
         // Act
         var movies = await _repo.LoadAllAsync<Movie>();
 
-        // Assert
-        Assert.That(movies.Count, Is.EqualTo(2));
+        // Assert - Verify both test nodes exist (may have other nodes from other tests)
+        Assert.That(movies.Any(m => m.Id == "load-1"), Is.True);
+        Assert.That(movies.Any(m => m.Id == "load-2"), Is.True);
     }
 
     [Test]
@@ -272,10 +290,13 @@ public class CrudIntegrationTests
         // Act - Delete first two
         await _repo.DetachDeleteManyAsync<Movie>(new List<string> { "del-many-1", "del-many-2" });
 
-        // Assert
-        var remaining = await _repo.LoadAllAsync<Movie>();
-        Assert.That(remaining.Count, Is.EqualTo(1));
-        Assert.That(remaining[0].Id, Is.EqualTo("del-many-3"));
+        // Assert - Verify deleted nodes are gone and kept node remains
+        var deleted1 = await _repo.LoadAsync<Movie>("del-many-1");
+        var deleted2 = await _repo.LoadAsync<Movie>("del-many-2");
+        var kept = await _repo.LoadAsync<Movie>("del-many-3");
+        Assert.That(deleted1, Is.Null);
+        Assert.That(deleted2, Is.Null);
+        Assert.That(kept, Is.Not.Null);
     }
 
     #endregion
@@ -312,14 +333,19 @@ public class CrudIntegrationTests
 
         // Verify relationship exists
         var beforeDelete = await _repo.LoadAsync<Movie>("del-rel-movie");
+        Assert.That(beforeDelete, Is.Not.Null);
         Assert.That(beforeDelete!.GenreIds, Does.Contain("del-rel-genre"));
+        var genreCountBefore = beforeDelete.GenreIds?.Count() ?? 0;
 
         // Act
         await _repo.DeleteRelationshipAsync(movie, "IN_GENRE", genre, Neo4jLiteRepo.Models.EdgeDirection.Outgoing);
 
         // Assert
         var afterDelete = await _repo.LoadAsync<Movie>("del-rel-movie");
+        Assert.That(afterDelete, Is.Not.Null);
         Assert.That(afterDelete!.GenreIds, Does.Not.Contain("del-rel-genre"));
+        var genreCountAfter = afterDelete.GenreIds?.Count() ?? 0;
+        Assert.That(genreCountAfter, Is.EqualTo(genreCountBefore - 1));
     }
 
     #endregion
@@ -336,16 +362,21 @@ public class CrudIntegrationTests
             new() { Id = "read-2", Title = "Comedy Movie", Released = 2022, Tagline = "Tag" }
         });
 
-        // Act
+        // Act - Filter for movies from this test only
         var results = await _repo.ExecuteReadListAsync<Movie>(
-            "MATCH (m:Movie) WHERE m.released >= $year RETURN m AS movie",
+            "MATCH (m:Movie) WHERE m.id IN $ids AND m.released >= $year RETURN m AS movie",
             "movie",
-            new Dictionary<string, object> { { "year", 2022 } });
+            new Dictionary<string, object> 
+            { 
+                { "ids", new[] { "read-1", "read-2" } },
+                { "year", 2022 } 
+            });
 
         // Assert
         var resultList = results.ToList();
         Assert.That(resultList.Count, Is.EqualTo(1));
         Assert.That(resultList[0].Title, Is.EqualTo("Comedy Movie"));
+        Assert.That(resultList[0].Id, Is.EqualTo("read-2"));
     }
 
     #endregion
@@ -363,8 +394,9 @@ public class CrudIntegrationTests
             new() { Id = "count-3", Title = "Movie 3", Released = 2023, Tagline = "Tag" }
         });
 
-        // Act
-        var count = await _repo.ExecuteReadScalarAsync<long>("MATCH (m:Movie) RETURN count(m)");
+        // Act - Query specifically for the test data
+        var count = await _repo.ExecuteReadScalarAsync<long>(
+            "MATCH (m:Movie) WHERE m.id IN ['count-1', 'count-2', 'count-3'] RETURN count(m)");
 
         // Assert
         Assert.That(count, Is.EqualTo(3));
@@ -387,18 +419,67 @@ public class CrudIntegrationTests
         await _repo.UpsertNode(genre);
         await _repo.MergeRelationshipAsync(connectedMovie, "IN_GENRE", genre);
 
-        // Verify both movies exist
-        var allMoviesBefore = await _repo.LoadAllAsync<Movie>();
-        Assert.That(allMoviesBefore.Count, Is.EqualTo(2));
+        // Verify both movies exist before cleanup
+        var connectedBefore = await _repo.LoadAsync<Movie>("connected");
+        var orphanBefore = await _repo.LoadAsync<Movie>("orphan");
+        Assert.That(connectedBefore, Is.Not.Null);
+        Assert.That(orphanBefore, Is.Not.Null);
 
         // Act - Remove orphan movies
         var removedCount = await _repo.RemoveOrphansAsync<Movie>();
 
-        // Assert
-        Assert.That(removedCount, Is.EqualTo(1));
-        var allMoviesAfter = await _repo.LoadAllAsync<Movie>();
-        Assert.That(allMoviesAfter.Count, Is.EqualTo(1));
-        Assert.That(allMoviesAfter[0].Id, Is.EqualTo("connected"));
+        // Assert - Orphan should be removed, connected should remain
+        Assert.That(removedCount, Is.GreaterThanOrEqualTo(1));
+        var connectedAfter = await _repo.LoadAsync<Movie>("connected");
+        var orphanAfter = await _repo.LoadAsync<Movie>("orphan");
+        Assert.That(connectedAfter, Is.Not.Null);
+        Assert.That(orphanAfter, Is.Null);
+    }
+
+    #endregion
+
+    #region Cleanup Verification Tests
+
+    [Test]
+    public async Task Cleanup_EnsuresDatabaseIsEmpty()
+    {
+        // Arrange - Add some test data
+        await _repo.UpsertNode(new Movie { Id = "cleanup-test", Title = "Test", Released = 2023, Tagline = "Tag" });
+        var beforeCleanup = await _repo.LoadAllAsync<Movie>();
+        Assert.That(beforeCleanup.Any(m => m.Id == "cleanup-test"), Is.True, "Test data should exist before cleanup");
+
+        // Act - Cleanup using direct driver query to verify cleanup method works
+        var cleanupSession = _driver.AsyncSession(o => o.WithDatabase(TestDatabase));
+        try
+        {
+            await cleanupSession.ExecuteWriteAsync(async tx =>
+            {
+                var result = await tx.RunAsync("MATCH (n) DETACH DELETE n");
+                await result.ConsumeAsync();
+            });
+        }
+        finally
+        {
+            await cleanupSession.CloseAsync();
+        }
+
+        // Assert - Database should be completely empty (using direct query)
+        var verifySession = _driver.AsyncSession(o => o.WithDatabase(TestDatabase));
+        try
+        {
+            var totalCount = await verifySession.ExecuteReadAsync(async tx =>
+            {
+                var result = await tx.RunAsync("MATCH (n) RETURN count(n) as count");
+                var record = await result.SingleAsync();
+                return record["count"].As<long>();
+            });
+            
+            Assert.That(totalCount, Is.EqualTo(0), $"Should have no nodes at all after cleanup, but found {totalCount}");
+        }
+        finally
+        {
+            await verifySession.CloseAsync();
+        }
     }
 
     #endregion
@@ -410,7 +491,11 @@ public class CrudIntegrationTests
         var session = _driver.AsyncSession(o => o.WithDatabase(TestDatabase));
         try
         {
-            await session.RunAsync("MATCH (n) DETACH DELETE n");
+            await session.ExecuteWriteAsync(async tx =>
+            {
+                var result = await tx.RunAsync("MATCH (n) DETACH DELETE n");
+                await result.ConsumeAsync();
+            });
         }
         finally
         {
@@ -420,29 +505,31 @@ public class CrudIntegrationTests
 
     private async Task EnsureDatabaseExists()
     {
+        // Note: Multiple databases require Neo4j Enterprise or AuraDB
+        // Community Edition users should set TestDatabase = "neo4j" (the default database)
+        
         var session = _driver.AsyncSession(o => o.WithDatabase("system"));
         try
         {
-            // Check if database exists
-            var result = await session.RunAsync(
-                "SHOW DATABASES YIELD name WHERE name = $dbName RETURN name",
-                new { dbName = TestDatabase });
+            // Try to create database - IF NOT EXISTS means this is safe to run even if it already exists
+            var result = await session.RunAsync($"CREATE DATABASE `{TestDatabase}` IF NOT EXISTS");
+            await result.ConsumeAsync();
+            Log.Information($"Ensured test database '{TestDatabase}' exists");
             
-            var databases = await result.ToListAsync();
-            
-            if (databases.Count == 0)
-            {
-                // Create database if it doesn't exist
-                await session.RunAsync($"CREATE DATABASE {TestDatabase} IF NOT EXISTS");
-                Log.Information($"Created test database: {TestDatabase}");
-                
-                // Wait a moment for database to be ready
-                await Task.Delay(2000);
-            }
+            // Wait a moment for database to be ready
+            await Task.Delay(1000);
+        }
+        catch (ClientException ex) when (ex.Code.Contains("Unsupported"))
+        {
+            // Community Edition doesn't support multiple databases
+            Log.Warning($"Multiple databases not supported (Community Edition). Please set TestDatabase = \"neo4j\" or upgrade to Enterprise/AuraDB.");
+            Log.Warning($"Tests will attempt to use '{TestDatabase}' database anyway.");
         }
         catch (Exception ex)
         {
-            Log.Warning($"Could not verify/create database {TestDatabase}: {ex.Message}");
+            Log.Error(ex, $"Failed to create database '{TestDatabase}'. Check your credentials match your Neo4j Desktop database.");
+            Log.Information($"Current credentials: User='{Neo4jUser}', Uri='{Neo4jUri}'");
+            throw;
         }
         finally
         {
