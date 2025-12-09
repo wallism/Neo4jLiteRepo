@@ -115,12 +115,9 @@ public abstract class Neo4jIntegrationTestBase
         Driver = Host.Services.GetRequiredService<IDriver>();
         Repo = Host.Services.GetRequiredService<INeo4jGenericRepo>();
 
-        // Ensure test database exists (if not using default database)
-        if (TestDatabase != "neo4j")
-        {
-            await EnsureDatabaseExists();
-        }
-
+        // Ensure test database exists 
+        await EnsureDatabaseExists();
+        
         // Clean up before tests to start with empty state
         await CleanupDatabase();
 
