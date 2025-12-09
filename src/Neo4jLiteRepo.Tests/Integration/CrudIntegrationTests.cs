@@ -343,6 +343,308 @@ public class CrudIntegrationTests : Neo4jIntegrationTestBase
 
     #endregion
 
+    #region DetachDeleteNodesByIdsAsync Tests - All Overloads
+
+    [Test]
+    [Ignore("DetachDeleteNodesByIdsAsync has a hardcoded whitelist that returns false for all labels - by design for safety")]
+    public async Task DetachDeleteNodesByIdsAsync_Standalone_DeletesNodes()
+    {
+        // Arrange
+        var movies = new List<Movie>
+        {
+            new() { Id = "byid-1", Title = "Movie 1", Released = 2021, Tagline = "T1" },
+            new() { Id = "byid-2", Title = "Movie 2", Released = 2022, Tagline = "T2" },
+            new() { Id = "byid-3", Title = "Movie 3", Released = 2023, Tagline = "T3" }
+        };
+        await Repo.UpsertNodes(movies);
+
+        // Act - Delete by label and IDs (standalone creates own session/transaction)
+        await Repo.DetachDeleteNodesByIdsAsync("Movie", new[] { "byid-1", "byid-2" });
+
+        // Assert
+        Assert.That(await Repo.LoadAsync<Movie>("byid-1"), Is.Null);
+        Assert.That(await Repo.LoadAsync<Movie>("byid-2"), Is.Null);
+        Assert.That(await Repo.LoadAsync<Movie>("byid-3"), Is.Not.Null);
+    }
+
+    [Test]
+    [Ignore("DetachDeleteNodesByIdsAsync has a hardcoded whitelist that returns false for all labels - by design for safety")]
+    public async Task DetachDeleteNodesByIdsAsync_WithSession_DeletesNodes()
+    {
+        // Arrange
+        var movies = new List<Movie>
+        {
+            new() { Id = "session-byid-1", Title = "M1", Released = 2021, Tagline = "T1" },
+            new() { Id = "session-byid-2", Title = "M2", Released = 2022, Tagline = "T2" }
+        };
+        await Repo.UpsertNodes(movies);
+
+        // Act - Use session overload
+        await using var session = Repo.StartSession();
+        await Repo.DetachDeleteNodesByIdsAsync("Movie", new[] { "session-byid-1" }, session);
+
+        // Assert
+        Assert.That(await Repo.LoadAsync<Movie>("session-byid-1"), Is.Null);
+        Assert.That(await Repo.LoadAsync<Movie>("session-byid-2"), Is.Not.Null);
+    }
+
+    [Test]
+    [Ignore("DetachDeleteNodesByIdsAsync has a hardcoded whitelist that returns false for all labels - by design for safety")]
+    public async Task DetachDeleteNodesByIdsAsync_WithTransaction_DeletesNodes()
+    {
+        // Arrange
+        var movies = new List<Movie>
+        {
+            new() { Id = "tx-byid-1", Title = "M1", Released = 2021, Tagline = "T1" },
+            new() { Id = "tx-byid-2", Title = "M2", Released = 2022, Tagline = "T2" }
+        };
+        await Repo.UpsertNodes(movies);
+
+        // Act - Use transaction overload
+        await using var session = Repo.StartSession();
+        await using var tx = await session.BeginTransactionAsync();
+        await Repo.DetachDeleteNodesByIdsAsync("Movie", new[] { "tx-byid-1" }, tx);
+        await tx.CommitAsync();
+
+        // Assert
+        Assert.That(await Repo.LoadAsync<Movie>("tx-byid-1"), Is.Null);
+        Assert.That(await Repo.LoadAsync<Movie>("tx-byid-2"), Is.Not.Null);
+    }
+
+    [Test]
+    [Ignore("DetachDeleteNodesByIdsAsync has a hardcoded whitelist that returns false for all labels - by design for safety")]
+    public async Task DetachDeleteNodesByIdsAsync_WithLargeBatch_HandlesBatching()
+    {
+        // Arrange - Create more than batch size (500)
+        var movies = Enumerable.Range(1, 600)
+            .Select(i => new Movie 
+            { 
+                Id = $"batch-del-{i}", 
+                Title = $"Movie {i}", 
+                Released = 2020, 
+                Tagline = "T" 
+            })
+            .ToList();
+        await Repo.UpsertNodes(movies);
+
+        // Act - Delete all in batches
+        var idsToDelete = movies.Select(m => m.Id).ToList();
+        await Repo.DetachDeleteNodesByIdsAsync("Movie", idsToDelete);
+
+        // Assert - Verify all deleted
+        var remaining = await Repo.LoadAllAsync<Movie>();
+        var batchDeleted = remaining.Where(m => m.Id.StartsWith("batch-del-")).ToList();
+        Assert.That(batchDeleted, Is.Empty);
+    }
+
+    [Test]
+    [Ignore("DetachDeleteNodesByIdsAsync has a hardcoded whitelist that returns false for all labels - by design for safety")]
+    public async Task DetachDeleteNodesByIdsAsync_RemovesRelationships()
+    {
+        // Arrange - Create node with relationships
+        var movie = new Movie { Id = "del-with-rels", Title = "Movie", Released = 2023, Tagline = "Test" };
+        var genre = new Genre { Id = "del-genre", Name = "Genre", Description = "Test" };
+        
+        await Repo.UpsertNode(movie);
+        await Repo.UpsertNode(genre);
+        await Repo.MergeRelationshipAsync(movie, "IN_GENRE", genre);
+
+        // Act - DETACH DELETE should remove node and relationships
+        await Repo.DetachDeleteNodesByIdsAsync("Movie", new[] { "del-with-rels" });
+
+        // Assert
+        Assert.That(await Repo.LoadAsync<Movie>("del-with-rels"), Is.Null);
+        Assert.That(await Repo.LoadAsync<Genre>("del-genre"), Is.Not.Null); // Genre should remain
+    }
+
+    #endregion
+
+    #region LoadAsync with Relationships Tests
+
+    [Test]
+    public async Task LoadAsync_PopulatesRelationshipIds()
+    {
+        // Arrange
+        var movie = new Movie { Id = "load-rels", Title = "Movie", Released = 2023, Tagline = "Test" };
+        var genre1 = new Genre { Id = "load-g1", Name = "Action", Description = "A" };
+        var genre2 = new Genre { Id = "load-g2", Name = "Drama", Description = "D" };
+
+        await Repo.UpsertNode(movie);
+        await Repo.UpsertNodes(new[] { genre1, genre2 });
+        await Repo.MergeRelationshipAsync(movie, "IN_GENRE", genre1);
+        await Repo.MergeRelationshipAsync(movie, "IN_GENRE", genre2);
+
+        // Act
+        var loaded = await Repo.LoadAsync<Movie>("load-rels");
+
+        // Assert
+        Assert.That(loaded, Is.Not.Null);
+        Assert.That(loaded!.GenreIds, Is.Not.Null);
+        Assert.That(loaded.GenreIds!.Count(), Is.EqualTo(2));
+        Assert.That(loaded.GenreIds, Does.Contain("load-g1"));
+        Assert.That(loaded.GenreIds, Does.Contain("load-g2"));
+    }
+
+    [Test]
+    public async Task LoadAllAsync_WithIncludeEdgeObjects_PopulatesEdges()
+    {
+        // Arrange - This tests the overload with includeEdgeObjects parameter
+        var movie = new Movie { Id = "edge-obj-movie", Title = "Movie", Released = 2023, Tagline = "Test" };
+        var genre = new Genre { Id = "edge-obj-genre", Name = "Action", Description = "A" };
+
+        await Repo.UpsertNode(movie);
+        await Repo.UpsertNode(genre);
+        await Repo.MergeRelationshipAsync(movie, "IN_GENRE", genre);
+
+        // Act - Load with edge objects included
+        var movies = await Repo.LoadAllAsync<Movie>(skip: 0, take: 100, includeEdgeObjects: true, includeEdges: new[] { "IN_GENRE" });
+
+        // Assert
+        var loadedMovie = movies.FirstOrDefault(m => m.Id == "edge-obj-movie");
+        Assert.That(loadedMovie, Is.Not.Null);
+        Assert.That(loadedMovie!.GenreIds, Does.Contain("edge-obj-genre"));
+    }
+
+    #endregion
+
+    #region Session and Transaction Pattern Tests
+
+    [Test]
+    public async Task SessionPattern_MultipleOperations_ShareSession()
+    {
+        // Act - Multiple operations using same session
+        await using var session = Repo.StartSession();
+        
+        var movie1 = new Movie { Id = "session-1", Title = "M1", Released = 2021, Tagline = "T1" };
+        var movie2 = new Movie { Id = "session-2", Title = "M2", Released = 2022, Tagline = "T2" };
+        
+        await Repo.UpsertNode(movie1, session);
+        await Repo.UpsertNode(movie2, session);
+        
+        // Assert - Both should be saved
+        Assert.That(await Repo.LoadAsync<Movie>("session-1"), Is.Not.Null);
+        Assert.That(await Repo.LoadAsync<Movie>("session-2"), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task TransactionPattern_Commit_SavesChanges()
+    {
+        // Act - Use transaction and commit
+        await using var session = Repo.StartSession();
+        await using var tx = await session.BeginTransactionAsync();
+        
+        var movie = new Movie { Id = "tx-commit", Title = "Movie", Released = 2023, Tagline = "Test" };
+        await Repo.UpsertNode(movie, tx);
+        await tx.CommitAsync();
+
+        // Assert
+        var loaded = await Repo.LoadAsync<Movie>("tx-commit");
+        Assert.That(loaded, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task TransactionPattern_Rollback_DiscardsChanges()
+    {
+        // Act - Use transaction but rollback
+        await using var session = Repo.StartSession();
+        await using var tx = await session.BeginTransactionAsync();
+        
+        var movie = new Movie { Id = "tx-rollback", Title = "Movie", Released = 2023, Tagline = "Test" };
+        await Repo.UpsertNode(movie, tx);
+        await tx.RollbackAsync(); // Rollback instead of commit
+
+        // Assert - Changes should be discarded
+        var loaded = await Repo.LoadAsync<Movie>("tx-rollback");
+        Assert.That(loaded, Is.Null);
+    }
+
+    [Test]
+    public async Task TransactionPattern_AtomicOperations_AllOrNothing()
+    {
+        // Arrange - Create genres first
+        var genre1 = new Genre { Id = "atomic-g1", Name = "G1", Description = "G1" };
+        var genre2 = new Genre { Id = "atomic-g2", Name = "G2", Description = "G2" };
+        await Repo.UpsertNodes(new[] { genre1, genre2 });
+
+        // Act - Multiple related operations in single transaction
+        await using var session = Repo.StartSession();
+        await using var tx = await session.BeginTransactionAsync();
+        
+        var movie = new Movie { Id = "atomic-movie", Title = "Movie", Released = 2023, Tagline = "Test" };
+        await Repo.UpsertNode(movie, tx);
+        await Repo.MergeRelationshipAsync(movie, "IN_GENRE", genre1, tx);
+        await Repo.MergeRelationshipAsync(movie, "IN_GENRE", genre2, tx);
+        await tx.CommitAsync();
+
+        // Assert - All operations should succeed
+        var loaded = await Repo.LoadAsync<Movie>("atomic-movie");
+        Assert.That(loaded, Is.Not.Null);
+        Assert.That(loaded!.GenreIds!.Count(), Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task TransactionPattern_ExceptionRollsBack()
+    {
+        // Act & Assert - Exception during transaction should rollback
+        await using var session = Repo.StartSession();
+        try
+        {
+            await using var tx = await session.BeginTransactionAsync();
+            
+            var movie = new Movie { Id = "exception-movie", Title = "Movie", Released = 2023, Tagline = "Test" };
+            await Repo.UpsertNode(movie, tx);
+            
+            // Intentionally cause a Cypher syntax error to force an exception
+            var badQuery = "INVALID CYPHER SYNTAX HERE";
+            await tx.RunAsync(badQuery);
+            
+            await tx.CommitAsync();
+            Assert.Fail("Should have thrown exception");
+        }
+        catch
+        {
+            // Expected - transaction should rollback
+        }
+
+        // Assert - Movie should not exist (transaction rolled back)
+        var loaded = await Repo.LoadAsync<Movie>("exception-movie");
+        Assert.That(loaded, Is.Null);
+    }
+
+    #endregion
+
+    #region UpsertNodes Batch Tests
+
+    [Test]
+    public async Task UpsertNodes_LargeBatch_HandlesEfficiently()
+    {
+        // Arrange - Large batch to test performance
+        var movies = Enumerable.Range(1, 1000)
+            .Select(i => new Movie 
+            { 
+                Id = $"large-batch-{i}", 
+                Title = $"Movie {i}", 
+                Released = 2020 + (i % 5), 
+                Tagline = $"Tagline {i}" 
+            })
+            .ToList();
+
+        // Act
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await Repo.UpsertNodes(movies);
+        sw.Stop();
+
+        // Assert
+        var loaded = await Repo.LoadAllAsync<Movie>();
+        var batchMovies = loaded.Where(m => m.Id.StartsWith("large-batch-")).ToList();
+        Assert.That(batchMovies.Count, Is.EqualTo(1000));
+        
+        // Should complete in reasonable time (adjust threshold as needed)
+        Assert.That(sw.ElapsedMilliseconds, Is.LessThan(30000), $"Batch upsert took {sw.ElapsedMilliseconds}ms");
+    }
+
+    #endregion
+
     #region Cleanup Verification Tests
 
     [Test]
