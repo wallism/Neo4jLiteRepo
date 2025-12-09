@@ -14,7 +14,7 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc/>
     public async Task<IEnumerable<string>> ExecuteReadListStringsAsync(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         try
         {
             parameters ??= new Dictionary<string, object>();
@@ -53,7 +53,7 @@ public partial class Neo4jGenericRepo
         where T : class, new()
     {
         // Maintains existing API while improving memory profile (no ToListAsync full materialization) and using compiled mapper
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         return await ExecuteReadListAsync<T>(query, returnObjectKey, session, parameters);
     }
 
@@ -126,7 +126,7 @@ public partial class Neo4jGenericRepo
         // WARNING: If the consumer does not fully enumerate the stream, the session may not be disposed promptly.
         // Use 'await using' to ensure session disposal and prevent memory leaks.
         parameters ??= new Dictionary<string, object>();
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         IResultCursor? cursor = null;
         try
         {
@@ -169,7 +169,7 @@ public partial class Neo4jGenericRepo
     /// <remarks>untested - 20250424</remarks>
     public async Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null)
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         try
         {
             parameters ??= new Dictionary<string, object>();
@@ -253,7 +253,7 @@ public partial class Neo4jGenericRepo
             return await InnerAsync(runner);
         }
 
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         return await session.ExecuteReadAsync(async tx => await InnerAsync(tx));
     }
 

@@ -14,7 +14,7 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc />
     public async Task<int> RemoveOrphansAsync<T>(CancellationToken ct = default) where T : GraphNode, new()
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         // Delegate to the session overload to keep all write orchestration logic centralized.
         return await RemoveOrphansAsync<T>(session, ct);
     }

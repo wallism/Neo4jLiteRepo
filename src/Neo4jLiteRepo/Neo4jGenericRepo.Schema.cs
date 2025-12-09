@@ -18,7 +18,7 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc/>
     public async Task<bool> EnforceUniqueConstraints(IEnumerable<INodeService> nodeServices)
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         foreach (var nodeService in nodeServices)
         {
             if (!nodeService.EnforceUniqueConstraint)
@@ -78,7 +78,7 @@ public partial class Neo4jGenericRepo
          */
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         try
         {
             var cypherTemplate = await GetCypherFromFile("CreateVectorIndexForEmbeddings.cypher", _logger);
@@ -165,7 +165,7 @@ public partial class Neo4jGenericRepo
     /// <returns>Useful if you want to feed your graph map into AI</returns>
     public async Task<NodeRelationshipsResponse> GetAllNodesAndEdgesAsync()
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         return await GetAllNodesAndEdgesAsync(session);
     }
 

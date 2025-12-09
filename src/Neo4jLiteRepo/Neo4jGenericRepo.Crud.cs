@@ -23,7 +23,7 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc/>
     public async Task<IResultSummary> UpsertNode<T>(T node, CancellationToken ct = default) where T : GraphNode
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         return await UpsertNode(node, session, ct).ConfigureAwait(false);
     }
 
@@ -64,14 +64,14 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc/>
     public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes) where T : GraphNode
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         return await UpsertNodes(nodes, session, CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes, CancellationToken ct) where T : GraphNode
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         return await UpsertNodes(nodes, session, ct).ConfigureAwait(false);
     }
 
@@ -134,7 +134,7 @@ public partial class Neo4jGenericRepo
         var relationships = GetRelationshipMetadata(typeof(T));
         var query = BuildLoadQuery(label, pkName, relationships, $"{{ {pkName}: $id }}", null, null, false, null);
 
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         try
         {
             var records = await session.ExecuteReadAsync(async tx =>
@@ -180,7 +180,7 @@ public partial class Neo4jGenericRepo
 
         var query = BuildLoadQuery(label, pkName, rels, $"{{ {pkName}: $id }}", null, null, includeEdgeObjects, includeSet);
 
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         try
         {
             var records = await session.ExecuteReadAsync(async tx =>
@@ -243,7 +243,7 @@ public partial class Neo4jGenericRepo
         if (query.Contains("$skip")) parameters["skip"] = skip;
         if (query.Contains("$take")) parameters["take"] = take;
 
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         try
         {
             var records = await session.ExecuteReadAsync(async tx =>
@@ -292,7 +292,7 @@ public partial class Neo4jGenericRepo
         if (query.Contains("$skip")) parameters["skip"] = skip;
         if (query.Contains("$take")) parameters["take"] = take;
 
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         try
         {
             var records = await session.ExecuteReadAsync(async tx =>
@@ -334,7 +334,7 @@ public partial class Neo4jGenericRepo
     {
         if (node == null) throw new ArgumentNullException(nameof(node));
 
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
@@ -367,7 +367,7 @@ public partial class Neo4jGenericRepo
     public async Task<IResultSummary> DetachDeleteAsync<T>(string pkValue, CancellationToken ct = default)
         where T : GraphNode, new()
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
@@ -422,7 +422,7 @@ public partial class Neo4jGenericRepo
     public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<T> nodes, CancellationToken ct = default)
         where T : GraphNode, new()
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
@@ -455,7 +455,7 @@ public partial class Neo4jGenericRepo
     public async Task<IResultSummary> DetachDeleteManyAsync<T>(List<string> ids, CancellationToken ct = default)
         where T : GraphNode, new()
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
@@ -514,7 +514,7 @@ public partial class Neo4jGenericRepo
     public async Task DetachDeleteNodesByIdsAsync(string label, IEnumerable<string> ids, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {

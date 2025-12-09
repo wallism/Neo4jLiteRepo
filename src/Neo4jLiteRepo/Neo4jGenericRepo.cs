@@ -19,9 +19,7 @@ namespace Neo4jLiteRepo
         /// Enforces unique constraints on the specified node services in the Neo4j database.
         /// </summary>
         Task<bool> EnforceUniqueConstraints(IEnumerable<INodeService> nodeServices);
-
-        /// <summary>
-
+        
         /// <summary>
         /// Executes the structured vector similarity search returning strongly typed rows (no string formatting side-effects).
         /// </summary>

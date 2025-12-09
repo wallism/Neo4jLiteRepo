@@ -29,28 +29,52 @@ public partial class Neo4jGenericRepo
         bool includeContext = true,
         double similarityThreshold = 0.65)
     {
-        var query = await GetCypherFromFile("ExecuteVectorSimilaritySearch.cypher", _logger);
+        // Validate input
+        if (questionEmbedding == null || questionEmbedding.Length == 0)
+        {
+            _logger.LogWarning("ExecuteVectorSimilaritySearchAsync called with null or empty embedding array");
+            return [];
+        }
 
-        await using var session = _neo4jDriver.AsyncSession();
+        _logger.LogDebug("ExecuteVectorSimilaritySearchAsync called with embedding size={EmbeddingSize}, topK={TopK}, threshold={Threshold}", 
+            questionEmbedding.Length, topK, similarityThreshold);
+
+        var query = await GetCypherFromFile("ExecuteVectorSimilaritySearch.cypher", _logger);
+        
+        await using var session = StartSession();
         List<string> result;
         try
         {
             result = await session.ExecuteReadAsync(async tx =>
             {
                 // Run the query
-                var cursor = await tx.RunAsync(query, new
+                // Note: Neo4j driver requires embedding as List, not array
+                IResultCursor cursor;
+                try
                 {
-                    questionEmbedding,
-                    topK,
-                    similarityThreshold
-                });
+                    cursor = await tx.RunAsync(query, new
+                    {
+                        questionEmbedding = questionEmbedding.ToList(),
+                        topK,
+                        similarityThreshold
+                    });
+                }
+                catch (Exception exQuery)
+                {
+                    _logger.LogError(exQuery, "Failed to execute Neo4j query");
+                    throw;
+                }
 
                 // Process results
                 var resultsDict = new Dictionary<string, Dictionary<string, object>>();
+                var recordCount = 0;
 
                 await foreach (var record in cursor)
                 {
-                    var id = record["id"].As<string>();
+                    recordCount++;
+                    try
+                    {
+                        var id = record["id"].As<string>();
 
                     // If we've already seen this chunk, skip it (avoid duplicates)
                     if (resultsDict.ContainsKey(id))
@@ -62,12 +86,20 @@ public partial class Neo4jGenericRepo
                         ["content"] = record["content"].As<string>(),
                         ["articleTitle"] = record["articleTitle"].As<string>(),
                         ["articleUrl"] = record["articleUrl"].As<string>(),
-                        ["score"] = record["score"].As<double>(),
-                        ["entities"] = record["entities"].As<List<string>>(),
+                        ["score"] = record["mainScore"].As<double>(),
+                        ["entities"] = record["mainEntities"].As<List<string>>(),
                         ["sequence"] = record["sequence"].As<int>(),
                         ["resultType"] = record["resultType"].As<string>()
                     };
+                    }
+                    catch (Exception exRecord)
+                    {
+                        _logger.LogWarning(exRecord, "Failed to process vector search record at position {RecordIndex}", recordCount);
+                    }
                 }
+
+                _logger.LogInformation("Vector search returned {RecordCount} records, {UniqueChunks} unique chunks", 
+                    recordCount, resultsDict.Count);
 
                 // Sort by article title and sequence order for better readability
                 var sortedResults = resultsDict.Values
@@ -145,14 +177,14 @@ public partial class Neo4jGenericRepo
         double similarityThreshold = 0.65)
     {
         var query = await GetCypherFromFile("ExecuteVectorSimilaritySearchStructured.cypher", _logger);
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         try
         {
             var rows = await session.ExecuteReadAsync(async tx =>
             {
                 var cursor = await tx.RunAsync(query, new
                 {
-                    questionEmbedding,
+                    questionEmbedding = questionEmbedding.ToList(),
                     topK,
                     similarityThreshold
                 });

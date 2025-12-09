@@ -21,7 +21,7 @@ public partial class Neo4jGenericRepo
     public async Task MergeRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
@@ -96,7 +96,7 @@ public partial class Neo4jGenericRepo
     public async Task DeleteRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, EdgeDirection direction, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
@@ -328,7 +328,7 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc/>
     public async Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         foreach (var node in fromNodes)
         {
             var result = await CreateRelationshipsAsync(node, session).ConfigureAwait(false);
@@ -342,7 +342,7 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc/>
     public async Task<bool> CreateRelationshipsAsync<T>(T fromNode) where T : GraphNode
     {
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         return await CreateRelationshipsAsync(fromNode, session);
     }
 
@@ -614,7 +614,7 @@ public partial class Neo4jGenericRepo
             return await ExecAsync(tx);
         }
 
-        await using var session = _neo4jDriver.AsyncSession();
+        await using var session = StartSession();
         return await session.ExecuteReadAsync(async rtx => await ExecAsync(rtx));
     }
 
