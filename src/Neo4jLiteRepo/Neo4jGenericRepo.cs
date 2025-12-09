@@ -356,6 +356,7 @@ namespace Neo4jLiteRepo
         private readonly IDriver _neo4jDriver;
         private readonly IDataSourceService _dataSourceService;
         private readonly string? _databaseName;
+        private readonly HashSet<string> _detachDeleteWhitelist;
 
         public Neo4jGenericRepo(
             ILogger<Neo4jGenericRepo> logger,
@@ -368,6 +369,17 @@ namespace Neo4jLiteRepo
             _neo4jDriver = neo4jDriver;
             _dataSourceService = dataSourceService;
             _databaseName = config["Neo4jSettings:Database"];
+            
+            // Load detach delete whitelist from configuration
+            var whitelist = config.GetSection("Neo4jSettings:DetachDeleteWhitelist").Get<string[]>() ?? [];
+            _detachDeleteWhitelist = new HashSet<string>(whitelist, StringComparer.OrdinalIgnoreCase);
+            
+            if (_detachDeleteWhitelist.Count > 0)
+            {
+                _logger.LogInformation("DetachDeleteWhitelist configured with {Count} label(s): {Labels}", 
+                    _detachDeleteWhitelist.Count, 
+                    string.Join(", ", _detachDeleteWhitelist));
+            }
         }
 
         #region Dispose
@@ -517,8 +529,22 @@ namespace Neo4jLiteRepo
         private bool IsInDetachDeleteWhitelist(string label)
         {
             // Only allow certain labels to be deleted via this method to avoid accidental mass deletes.
-            _logger.LogWarning("ZERO labels defined on whitelist"); // todo: make configurable
-            return false;
+            if (_detachDeleteWhitelist.Count == 0)
+            {
+                _logger.LogWarning("DetachDeleteWhitelist is empty - no labels allowed for detach delete operations. Configure 'Neo4jSettings:DetachDeleteWhitelist' to enable.");
+                return false;
+            }
+            
+            var isWhitelisted = _detachDeleteWhitelist.Contains(label);
+            
+            if (!isWhitelisted)
+            {
+                _logger.LogWarning("Label '{Label}' is not in DetachDeleteWhitelist. Allowed labels: {AllowedLabels}", 
+                    label, 
+                    string.Join(", ", _detachDeleteWhitelist));
+            }
+            
+            return isWhitelisted;
         }
 
         #endregion

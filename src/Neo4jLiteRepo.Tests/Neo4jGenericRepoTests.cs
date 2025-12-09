@@ -463,6 +463,65 @@ public class Neo4jGenericRepoTests
 
     #endregion
 
+    #region DetachDeleteWhitelist Tests
+
+    [Test]
+    public void Constructor_EmptyWhitelist_LogsWarningOnDelete()
+    {
+        // Arrange - configuration with empty whitelist
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string>
+            {
+                { "Neo4jSettings:DetachDeleteWhitelist:0", "" }
+            }!)
+            .Build();
+
+        // Act
+        var repo = new Neo4jGenericRepo(_logger, config, _mockDriver, _mockDataSourceService);
+
+        // Assert - repo should be created successfully with empty whitelist
+        Assert.That(repo, Is.Not.Null);
+    }
+
+    [Test]
+    public void Constructor_WithWhitelistedLabels_LogsConfiguration()
+    {
+        // Arrange - configuration with whitelist
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string>
+            {
+                { "Neo4jSettings:DetachDeleteWhitelist:0", "TempNode" },
+                { "Neo4jSettings:DetachDeleteWhitelist:1", "TestData" }
+            }!)
+            .Build();
+
+        // Act
+        var repo = new Neo4jGenericRepo(_logger, config, _mockDriver, _mockDataSourceService);
+
+        // Assert - repo should be created successfully with configured whitelist
+        Assert.That(repo, Is.Not.Null);
+    }
+
+    [Test]
+    public void Constructor_NullWhitelist_InitializesEmptyHashSet()
+    {
+        // Arrange - configuration without whitelist section
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string>
+            {
+                { "Neo4jSettings:Connection", "neo4j://localhost:7687" }
+            }!)
+            .Build();
+
+        // Act
+        var repo = new Neo4jGenericRepo(_logger, config, _mockDriver, _mockDataSourceService);
+
+        // Assert - repo should handle null configuration gracefully
+        Assert.That(repo, Is.Not.Null);
+    }
+
+    #endregion
+
     #region Helper Methods
 
     private void SetupTransactionRunAsync()

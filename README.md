@@ -173,10 +173,13 @@ volumedata/
   "Neo4jSettings": {
     "Connection": "neo4j://localhost:7687", 
     "User": "neo4j",
-    "Password": "your-password"
+    "Password": "your-password",
+    "DetachDeleteWhitelist": [ "TempNode", "TestData" ]
   }
 }
 ```
+
+**Security Note**: The `DetachDeleteWhitelist` array specifies which node labels can be deleted using detach delete operations. An empty array (default) prevents accidental mass deletes. Only add labels you explicitly want to allow for bulk deletion.
 
 ### 3. Create Nodes and Relationships
 - Add node classes (inheriting from `GraphNode`) and decorate with attributes as described above.
