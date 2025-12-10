@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -6,8 +6,6 @@
     <Nullable>enable</Nullable>
     <UserSecretsId>5f8e03b2-23a9-4b6b-bdfb-73c3d2c4e489</UserSecretsId>
     <IsTestProject>true</IsTestProject>
-    <RootNamespace>Neo4jLiteRepo.UnitTests</RootNamespace>
-    <AssemblyName>Neo4jLiteRepo.UnitTests</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

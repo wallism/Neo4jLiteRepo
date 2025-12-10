@@ -4,7 +4,9 @@ VisualStudioVersion = 17.13.35806.99
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Neo4jLiteRepo", "Neo4jLiteRepo\Neo4jLiteRepo.csproj", "{E027B096-02E9-4459-AB9A-CFA1D80D481F}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Neo4jLiteRepo.Tests", "Neo4jLiteRepo.Tests\Neo4jLiteRepo.Tests.csproj", "{BF7540E6-A08A-4912-AB76-DBCF24E43BA8}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Neo4jLiteRepo.UnitTests", "Neo4jLiteRepo.Tests\Neo4jLiteRepo.UnitTests.csproj", "{BF7540E6-A08A-4912-AB76-DBCF24E43BA8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Neo4jLiteRepo.IntegrationTests", "Neo4jLiteRepo.IntegrationTests\Neo4jLiteRepo.IntegrationTests.csproj", "{A1B2C3D4-E5F6-4789-ABCD-EF0123456789}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Neo4jLiteRepo.Sample", "Neo4jLiteRepo.Sample\Neo4jLiteRepo.Sample.csproj", "{9CBE10EE-8D1D-4757-B45F-2FF9453C5C9B}"
 EndProject
@@ -26,6 +28,10 @@ Global
 		{BF7540E6-A08A-4912-AB76-DBCF24E43BA8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BF7540E6-A08A-4912-AB76-DBCF24E43BA8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{BF7540E6-A08A-4912-AB76-DBCF24E43BA8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1B2C3D4-E5F6-4789-ABCD-EF0123456789}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B2C3D4-E5F6-4789-ABCD-EF0123456789}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B2C3D4-E5F6-4789-ABCD-EF0123456789}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B2C3D4-E5F6-4789-ABCD-EF0123456789}.Release|Any CPU.Build.0 = Release|Any CPU
 		{9CBE10EE-8D1D-4757-B45F-2FF9453C5C9B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{9CBE10EE-8D1D-4757-B45F-2FF9453C5C9B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9CBE10EE-8D1D-4757-B45F-2FF9453C5C9B}.Release|Any CPU.ActiveCfg = Release|Any CPU
