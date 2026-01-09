@@ -323,15 +323,15 @@ public partial class Neo4jGenericRepo
 
     #endregion
 
-    #region CreateRelationships
+    #region UpsertRelationships
 
     /// <inheritdoc/>
-    public async Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode
+    public async Task<bool> UpsertRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode
     {
         await using var session = StartSession();
         foreach (var node in fromNodes)
         {
-            var result = await CreateRelationshipsAsync(node, session).ConfigureAwait(false);
+            var result = await UpsertRelationshipsAsync(node, session).ConfigureAwait(false);
             if (!result)
                 return false; // exit on failure. (may want to continue on failure of individual nodes?)
         }
@@ -340,16 +340,16 @@ public partial class Neo4jGenericRepo
     }
 
     /// <inheritdoc/>
-    public async Task<bool> CreateRelationshipsAsync<T>(T fromNode) where T : GraphNode
+    public async Task<bool> UpsertRelationshipsAsync<T>(T fromNode) where T : GraphNode
     {
         await using var session = StartSession();
-        return await CreateRelationshipsAsync(fromNode, session);
+        return await UpsertRelationshipsAsync(fromNode, session);
     }
 
     /// <summary>
-    /// Creates relationships using an existing session. Caller is responsible for disposing the session.
+    /// Upserts relationships using an existing session. Caller is responsible for disposing the session.
     /// </summary>
-    public async Task<bool> CreateRelationshipsAsync<T>(T fromNode, IAsyncSession session) where T : GraphNode
+    public async Task<bool> UpsertRelationshipsAsync<T>(T fromNode, IAsyncSession session) where T : GraphNode
     {
         var nodeType = fromNode.GetType();
         var properties = nodeType.GetProperties();
@@ -402,7 +402,7 @@ public partial class Neo4jGenericRepo
                 // stock standard relationship with no properties on the edge
                 if (seedEdgeType == null)
                 {
-                    await ExecuteCreateRelationshipsAsync(fromNode,
+                    await ExecuteUpsertRelationshipsAsync(fromNode,
                         session,
                         relatedNodeType,
                         relationshipName,
@@ -447,7 +447,7 @@ public partial class Neo4jGenericRepo
                     ? "SET " + string.Join(", ", setClauses)
                     : string.Empty;
 
-                await ExecuteCreateRelationshipsAsync(fromNode,
+                await ExecuteUpsertRelationshipsAsync(fromNode,
                     session,
                     relatedNodeType,
                     relationshipName,
@@ -458,7 +458,7 @@ public partial class Neo4jGenericRepo
         return true;
     }
 
-    private async Task ExecuteCreateRelationshipsAsync<T>(T fromNode, IAsyncSession session, Type relatedNodeType, string relationshipName,
+    private async Task ExecuteUpsertRelationshipsAsync<T>(T fromNode, IAsyncSession session, Type relatedNodeType, string relationshipName,
         string toNodeKey, string relatedNodeTypeName, Dictionary<string, object?> parameters, string setClause = "") where T : GraphNode
     {
         // Determine PK name for the related type (fallback to "Id" if type cannot be constructed)
@@ -487,11 +487,11 @@ public partial class Neo4jGenericRepo
 
     #endregion
 
-    #region LoadRelatedNodes
+    #region LoadNodesViaPathNoEdges
 
     /// <summary>
-    /// Generic helper to traverse from a source node to related nodes through a set of relationship types
-    /// using a variable length path and return the distinct related nodes mapped to the requested type.
+    /// Traverses from a source node to related nodes via specified relationship path (variable-length pattern matching).
+    /// Returns only the target nodes WITHOUT any edge data populated. For nodes WITH edges, use <see cref="LoadRelatedAsync{TSource,TRelated}"/> instead.
     /// </summary>
     /// <remarks>
     /// Cypher pattern generated:
@@ -500,7 +500,7 @@ public partial class Neo4jGenericRepo
     /// Validation enforces simple safe relationship tokens (alphanumeric &amp; underscore). Relationship names are
     /// upper‑cased to align with existing conventions (see ToGraphRelationShipCasing). Designed for read paths only.
     /// </remarks>
-    public async Task<IReadOnlyList<TRelated>> LoadRelatedNodesAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4, IAsyncTransaction? tx = null,
+    public async Task<IReadOnlyList<TRelated>> LoadNodesViaPathNoEdgesAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4, IAsyncTransaction? tx = null,
         CancellationToken ct = default)
         where TSource : GraphNode, new()
         where TRelated : GraphNode, new()
@@ -538,10 +538,11 @@ public partial class Neo4jGenericRepo
     }
 
     /// <summary>
-    /// Lightweight variant that returns only the distinct id values of related nodes rather than hydrating full node objects.
+    /// Traverses from a source node and returns only the distinct IDs of related nodes (no full node hydration, no edges).
+    /// Lightweight variant useful for relationship/cascade operations where you only need IDs.
     /// Supports traversing outgoing, incoming or undirected (both) relationships.
     /// </summary>
-    public async Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
+    public async Task<IReadOnlyList<string>> LoadNodeIdsViaPathNoEdgesAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
         EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
         where TRelated : GraphNode, new()
     {
@@ -604,7 +605,7 @@ public partial class Neo4jGenericRepo
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogError(ex, "LoadRelatedNodeIdsAsync failure. QueryLength={QueryLength}", query.Length);
+                _logger.LogError(ex, "LoadNodeIdsViaPathNoEdgesAsync failure. QueryLength={QueryLength}", query.Length);
                 throw new RepositoryException("Failed executing related node id list read.", query, parameters.Keys, ex);
             }
         }
@@ -616,6 +617,269 @@ public partial class Neo4jGenericRepo
 
         await using var session = StartSession();
         return await session.ExecuteReadAsync(async rtx => await ExecAsync(rtx));
+    }
+
+    #endregion
+
+    #region CreateRelationships (aliases for UpsertRelationships)
+
+    /// <summary>
+    /// Creates relationships for a single node using attribute-defined relationships.
+    /// Alias for UpsertRelationshipsAsync for backward compatibility.
+    /// </summary>
+    public async Task<bool> CreateRelationshipsAsync<T>(T node) where T : GraphNode
+    {
+        return await UpsertRelationshipsAsync(node);
+    }
+
+    /// <summary>
+    /// Creates relationships for a single node using the provided session.
+    /// Alias for UpsertRelationshipsAsync for backward compatibility.
+    /// </summary>
+    public async Task<bool> CreateRelationshipsAsync<T>(T node, IAsyncSession session) where T : GraphNode
+    {
+        return await UpsertRelationshipsAsync(node, session);
+    }
+
+    /// <summary>
+    /// Creates relationships for a collection of nodes using attribute-defined relationships.
+    /// Alias for UpsertRelationshipsAsync for backward compatibility.
+    /// </summary>
+    public async Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> nodes) where T : GraphNode
+    {
+        return await UpsertRelationshipsAsync(nodes);
+    }
+
+    #endregion
+
+    #region LoadRelatedAsync (with edges)
+
+    /// <summary>
+    /// Loads related nodes of type <typeparamref name="TRelated"/> reachable from a source node via specified relationship(s),
+    /// AND automatically populates all outgoing edge id lists and optional edge objects (like LoadAllAsync does).
+    /// This eliminates the need for custom ExecuteReadListAsync queries when you want related nodes WITH their edges loaded.
+    /// </summary>
+    /// <remarks>
+    /// Common use case: Load all Role nodes connected to a Team via FOR_TEAM relationship, with all Role edges populated.
+    /// Previously required: ExecuteReadListAsync("MATCH (role:Role)-[:FOR_TEAM]->(team:Team {id: $teamId}) RETURN role", ...)
+    /// Now use: LoadRelatedAsync&lt;Team, Role&gt;(teamId, "FOR_TEAM", minHops: 1, maxHops: 1, direction: EdgeDirection.Incoming)
+    /// 
+    /// Uses the same BuildLoadQuery helper that powers LoadAsync/LoadAllAsync to ensure consistent edge loading behavior.
+    /// </remarks>
+    public async Task<IReadOnlyList<TRelated>> LoadRelatedAsync<TSource, TRelated>(
+        string sourceId,
+        string relationshipTypes,
+        int minHops = 1,
+        int maxHops = 1,
+        bool includeEdgeObjects = false,
+        IEnumerable<string>? includeEdges = null,
+        EdgeDirection direction = EdgeDirection.Outgoing,
+        IAsyncTransaction? tx = null,
+        CancellationToken ct = default)
+        where TSource : GraphNode, new()
+        where TRelated : GraphNode, new()
+    {
+        ct.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(sourceId)) throw new ArgumentException("sourceId required", nameof(sourceId));
+        if (string.IsNullOrWhiteSpace(relationshipTypes)) throw new ArgumentException("relationshipTypes required", nameof(relationshipTypes));
+        if (minHops < 0) throw new ArgumentOutOfRangeException(nameof(minHops), "minHops cannot be negative");
+        if (maxHops < minHops) throw new ArgumentOutOfRangeException(nameof(maxHops), "maxHops must be >= minHops");
+        if (maxHops > 10) throw new ArgumentOutOfRangeException(nameof(maxHops), "maxHops > 10 likely indicates an inefficient query");
+
+        var sourceTemp = new TSource();
+        var sourceLabel = sourceTemp.LabelName;
+        var sourcePk = sourceTemp.GetPrimaryKeyName();
+
+        var targetTemp = new TRelated();
+        var targetLabel = targetTemp.LabelName;
+        var targetPk = targetTemp.GetPrimaryKeyName();
+
+        // Validate and normalize relationship tokens
+        var relTokens = relationshipTypes.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (relTokens.Length == 0) throw new ArgumentException("No valid relationship tokens provided", nameof(relationshipTypes));
+        foreach (var r in relTokens)
+        {
+            if (!_labelValidationRegex.IsMatch(r))
+                throw new ArgumentException($"Invalid relationship token '{r}'. Only A-Z, a-z, 0-9 and '_' allowed.", nameof(relationshipTypes));
+        }
+
+        var relPattern = string.Join('|', relTokens.Select(t => t.ToGraphRelationShipCasing()));
+
+        // Build direction pattern
+        var dirPattern = direction switch
+        {
+            EdgeDirection.Outgoing => $"-[:{relPattern}*{minHops}..{maxHops}]->",
+            EdgeDirection.Incoming => $"<-[:{relPattern}*{minHops}..{maxHops}]-",
+            EdgeDirection.Both => $"-[:{relPattern}*{minHops}..{maxHops}]-",
+            _ => throw new ArgumentException($"Invalid direction {direction}")
+        };
+
+        // Get relationship metadata for TRelated (this is what enables edge loading)
+        var relationships = GetRelationshipMetadata(typeof(TRelated));
+        var includeSet = includeEdges != null ? new HashSet<string>(includeEdges, StringComparer.OrdinalIgnoreCase) : null;
+
+        // Build the traversal + edge loading query
+        // Start with traversal to find related nodes
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"MATCH (s:{sourceLabel} {{ {sourcePk}: $sourceId }}){dirPattern}(n:{targetLabel})\n");
+
+        // Now add the edge loading logic (same as LoadAllAsync pattern)
+        if (relationships.Count > 0)
+        {
+            for (var i = 0; i < relationships.Count; i++)
+            {
+                var r = relationships[i];
+                sb.Append($"OPTIONAL MATCH (n)-[:{r.edgeName}]->(relNode{i}:{r.TargetLabel})\n");
+                sb.Append($"WITH s, n, collect(DISTINCT relNode{i}.{r.TargetPrimaryKey}) AS {r.Alias}");
+                if (i > 0)
+                {
+                    var carry = string.Join(", ", relationships.Take(i).Select(m => m.Alias));
+                    sb.Append(", ").Append(carry);
+                }
+                sb.Append('\n');
+            }
+
+            sb.Append("RETURN DISTINCT n");
+            foreach (var r in relationships)
+                sb.Append($", {r.Alias}");
+
+            // Add edge object pattern comprehensions if requested
+            if (includeEdgeObjects)
+            {
+                for (var i = 0; i < relationships.Count; i++)
+                {
+                    var r = relationships[i];
+                    if (r.EdgeObjectType == null) continue;
+
+                    // Apply filter if specified
+                    if (includeSet != null && includeSet.Count > 0)
+                    {
+                        if (!includeSet.Contains(r.Property.Name, StringComparer.OrdinalIgnoreCase)
+                            && !includeSet.Contains(r.edgeName, StringComparer.OrdinalIgnoreCase)
+                            && !includeSet.Contains(r.TargetLabel, StringComparer.OrdinalIgnoreCase))
+                        {
+                            continue; // skip this edge type
+                        }
+                    }
+
+                    var relVar = $"rel{i}";
+                    var toVar = $"to{i}";
+                    var srcIdKey = $"{targetLabel}Id";
+                    var tgtIdKey = $"{r.TargetLabel}Id";
+
+                    sb.Append($", [ (n)-[{relVar}:{r.edgeName}]->({toVar}:{r.TargetLabel}) | ");
+                    sb.Append($"{relVar} {{ .*");
+                    sb.Append($", FromId: n.{targetPk}, ToId: {toVar}.{r.TargetPrimaryKey}");
+                    sb.Append($", {srcIdKey}: n.{targetPk}, {tgtIdKey}: {toVar}.{r.TargetPrimaryKey}");
+                    sb.Append(" } ] AS ").Append(r.ObjAlias);
+                }
+            }
+        }
+        else
+        {
+            // No edges defined on TRelated, just return the nodes
+            sb.Append("RETURN DISTINCT n");
+        }
+
+        var query = sb.ToString();
+        var parameters = new Dictionary<string, object> { { "sourceId", sourceId } };
+
+        // Execute the query
+        async Task<IReadOnlyList<TRelated>> ExecAsync(IAsyncQueryRunner runner)
+        {
+            try
+            {
+                var cursor = await runner.RunAsync(query, parameters);
+                var results = new List<TRelated>();
+
+                while (await cursor.FetchAsync())
+                {
+                    var record = cursor.Current;
+                    if (!record.Keys.Contains("n")) continue;
+
+                    var node = record["n"].As<INode>();
+                    var entity = MapNodeToObject<TRelated>(node);
+
+                    // Map relationship id lists
+                    MapRelationshipLists(record, entity, relationships);
+
+                    // Map edge objects if requested
+                    if (includeEdgeObjects)
+                        MapEdgeObjects(record, entity, relationships);
+
+                    results.Add(entity);
+                }
+
+                return results;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "LoadRelatedAsync failure. QueryLength={QueryLength}", query.Length);
+                throw new RepositoryException("Failed executing related nodes load with edges.", query, parameters.Keys, ex);
+            }
+        }
+
+        if (tx != null)
+        {
+            return await ExecAsync(tx);
+        }
+
+        await using var session = StartSession();
+        return await session.ExecuteReadAsync(async rtx => await ExecAsync(rtx));
+    }
+
+    #endregion
+
+    #region Alias Methods for Backward Compatibility
+
+    /// <summary>
+    /// Loads related nodes reachable from a source node via specified relationships.
+    /// Alias for LoadRelatedAsync with simplified parameters.
+    /// </summary>
+    public async Task<IReadOnlyList<TRelated>> LoadRelatedNodesAsync<TSource, TRelated>(
+        string sourceId,
+        string relationshipTypes,
+        int minHops = 1,
+        int maxHops = 1,
+        IAsyncTransaction? tx = null,
+        CancellationToken ct = default)
+        where TSource : GraphNode, new()
+        where TRelated : GraphNode, new()
+    {
+        return await LoadRelatedAsync<TSource, TRelated>(
+            sourceId,
+            relationshipTypes,
+            minHops,
+            maxHops,
+            includeEdgeObjects: false,
+            includeEdges: null,
+            direction: EdgeDirection.Outgoing,
+            tx,
+            ct);
+    }
+
+    /// <summary>
+    /// Returns only the distinct IDs of related nodes (no full node hydration).
+    /// Alias for LoadNodeIdsViaPathNoEdgesAsync.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(
+        GraphNode fromNode,
+        string relationshipTypes,
+        int minHops = 1,
+        int maxHops = 1,
+        EdgeDirection direction = EdgeDirection.Outgoing,
+        IAsyncTransaction? tx = null,
+        CancellationToken ct = default)
+        where TRelated : GraphNode, new()
+    {
+        return await LoadNodeIdsViaPathNoEdgesAsync<TRelated>(
+            fromNode,
+            relationshipTypes,
+            minHops,
+            maxHops,
+            direction,
+            tx,
+            ct);
     }
 
     #endregion

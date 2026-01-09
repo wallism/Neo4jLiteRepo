@@ -628,4 +628,24 @@ public partial class Neo4jGenericRepo
     }
 
     #endregion
+
+    #region ExecuteWriteAsync
+
+    /// <inheritdoc/>
+    public async Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters = null)
+    {
+        await using var session = StartSession();
+        return await ExecuteWriteAsync(query, parameters, session);
+    }
+
+    /// <inheritdoc/>
+    public async Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters, IAsyncSession session)
+    {
+        return await session.ExecuteWriteAsync(async tx =>
+        {
+            return await ExecuteWriteQuery(tx, query, parameters ?? new Dictionary<string, object>());
+        });
+    }
+
+    #endregion
 }

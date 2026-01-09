@@ -133,7 +133,7 @@ namespace Neo4jLiteRepo
         {
             var graphNodes = nodeData.ToList();
 
-            await graphRepo.CreateRelationshipsAsync(graphNodes).ConfigureAwait(false);
+            await graphRepo.UpsertRelationshipsAsync(graphNodes).ConfigureAwait(false);
 
             return true;
         }

@@ -19,19 +19,19 @@ public interface INeo4jRelationshipRepository
     Task MergeRelationshipAsync(GraphNode fromNode, string rel, GraphNode toNode, IAsyncTransaction tx, CancellationToken ct = default);
 
     /// <summary>
-    /// Creates relationships for a collection of nodes in the Neo4j database.
+    /// Upserts relationships for a collection of nodes in the Neo4j database.
     /// </summary>
-    Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode;
+    Task<bool> UpsertRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode;
 
     /// <summary>
-    /// Creates relationships for a single node in the Neo4j database.
+    /// Upserts relationships for a single node in the Neo4j database.
     /// </summary>
-    Task<bool> CreateRelationshipsAsync<T>(T nodes) where T : GraphNode;
+    Task<bool> UpsertRelationshipsAsync<T>(T nodes) where T : GraphNode;
 
     /// <summary>
-    /// Creates relationships for a node using the provided session.
+    /// Upserts relationships for a node using the provided session.
     /// </summary>
-    Task<bool> CreateRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
+    Task<bool> UpsertRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
 
     /// <summary>
     /// Deletes a relationship of the specified type and direction between two nodes.
@@ -66,6 +66,23 @@ public interface INeo4jRelationshipRepository
     /// Loads the distinct ids of related nodes.
     /// </summary>
     Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
+        EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
+        where TRelated : GraphNode, new();
+
+    /// <summary>
+    /// Traverses from a source node to related nodes via specified relationship path (variable-length pattern matching).
+    /// Returns only the target nodes WITHOUT any edge data populated. For nodes WITH edges, use LoadRelatedAsync instead.
+    /// </summary>
+    Task<IReadOnlyList<TRelated>> LoadNodesViaPathNoEdgesAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4, IAsyncTransaction? tx = null,
+        CancellationToken ct = default)
+        where TSource : GraphNode, new()
+        where TRelated : GraphNode, new();
+
+    /// <summary>
+    /// Traverses from a source node and returns only the distinct IDs of related nodes (no full node hydration, no edges).
+    /// Lightweight variant useful for relationship/cascade operations where you only need IDs.
+    /// </summary>
+    Task<IReadOnlyList<string>> LoadNodeIdsViaPathNoEdgesAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
         EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
         where TRelated : GraphNode, new();
 }

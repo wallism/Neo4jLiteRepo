@@ -190,6 +190,36 @@ public partial class Neo4jGenericRepo
         }
     }
 
+    /// <summary>
+    /// Executes a raw Cypher read query and returns the raw records for custom processing.
+    /// </summary>
+    public async Task<IReadOnlyList<IRecord>> ExecuteRawReadQueryAsync(
+        string query, 
+        IDictionary<string, object>? parameters = null, 
+        CancellationToken ct = default)
+    {
+        await using var session = StartSession();
+        try
+        {
+            parameters ??= new Dictionary<string, object>();
+
+            var result = await session.ExecuteReadAsync(async tx =>
+            {
+                var cursor = await tx.RunAsync(query, parameters);
+                var records = await cursor.ToListAsync(ct);
+                return (IReadOnlyList<IRecord>)records;
+            });
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Problem executing raw read query. QueryLength={QueryLength} ParamKeys={ParamKeys}", 
+                query.Length, string.Join(',', parameters?.Keys ?? []));
+            throw new RepositoryException("Raw read query failed.", query, parameters?.Keys ?? [], ex);
+        }
+    }
+
     #endregion
 
     #region ExecuteReadNodeQueryAsync

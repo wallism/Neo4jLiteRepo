@@ -48,6 +48,8 @@ public abstract class GraphNode
 
     public abstract string GetMainContent();
 
+    public virtual bool EnforceUniqueConstraint { get; set; } = true;
+
     private PropertyInfo? _primaryKeyProperty;
 
     /// <summary>

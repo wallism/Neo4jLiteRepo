@@ -60,7 +60,6 @@ public abstract class FileNodeService<T> : INodeService
             throw;
         }
     }
-    
     protected async Task<IEnumerable<T>> LoadDataFromFileWithoutTypeInfo(string fullFilePath)
     {
         try

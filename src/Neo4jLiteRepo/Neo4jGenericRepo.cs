@@ -31,6 +31,7 @@ namespace Neo4jLiteRepo
         /// </summary>
         Task<bool> CreateVectorIndexForEmbeddings(IList<string>? labelNames = null, int dimensions = 3072);
 
+        Task<bool> EnforceUniqueConstraintsForAllGraphNodes(IEnumerable<System.Reflection.Assembly>? assemblies = null);
 
         /// <summary>
         /// Convenience method - creates its own session
@@ -70,19 +71,34 @@ namespace Neo4jLiteRepo
 
 
         /// <summary>
-        /// Creates relationships for a collection of nodes in the Neo4j database.
+        /// Upserts relationships for a collection of nodes in the Neo4j database.
         /// </summary>
-        Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode;
+        Task<bool> UpsertRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode;
 
         /// <summary>
-        /// Creates relationships for a single node in the Neo4j database.
+        /// Upserts relationships for a single node in the Neo4j database.
         /// </summary>
-        Task<bool> CreateRelationshipsAsync<T>(T nodes) where T : GraphNode;
+        Task<bool> UpsertRelationshipsAsync<T>(T nodes) where T : GraphNode;
 
         /// <summary>
-        /// Creates relationships for a node using the provided session.
+        /// Upserts relationships for a node using the provided session.
         /// </summary>
-        Task<bool> CreateRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
+        Task<bool> UpsertRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
+
+        /// <summary>
+        /// Creates relationships for a single node using attribute-defined relationships.
+        /// </summary>
+        Task<bool> CreateRelationshipsAsync<T>(T node) where T : GraphNode;
+
+        /// <summary>
+        /// Creates relationships for a single node using the provided session.
+        /// </summary>
+        Task<bool> CreateRelationshipsAsync<T>(T node, IAsyncSession session) where T : GraphNode;
+
+        /// <summary>
+        /// Creates relationships for a collection of nodes using attribute-defined relationships.
+        /// </summary>
+        Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> nodes) where T : GraphNode;
 
         /// <summary>
         /// Get a list of the names of all labels (node types) and their edges (in and out) as JSON.
@@ -127,6 +143,25 @@ namespace Neo4jLiteRepo
         /// Executes a read query and returns a scalar value of type T.
         /// </summary>
         Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null);
+
+        /// <summary>
+        /// Executes a write query and returns the result summary.
+        /// </summary>
+        Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters = null);
+
+        /// <summary>
+        /// Executes a write query using the provided session and returns the result summary.
+        /// </summary>
+        Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters, IAsyncSession session);
+
+        /// <summary>
+        /// Executes a raw Cypher read query and returns the raw records for custom processing.
+        /// </summary>
+        /// <param name="query">The Cypher query to execute</param>
+        /// <param name="parameters">Optional query parameters</param>
+        /// <param name="ct">Cancellation token</param>
+        /// <returns>List of raw Neo4j records</returns>
+        Task<IReadOnlyList<IRecord>> ExecuteRawReadQueryAsync(string query, IDictionary<string, object>? parameters = null, CancellationToken ct = default);
 
         /// <summary>
         /// Executes a vector similarity search query to find relevant content chunks
@@ -319,29 +354,105 @@ namespace Neo4jLiteRepo
         /// <param name="tx">Optional existing transaction to participate in; when null a temporary session/read tx is created.</param>
         /// <param name="ct">Cancellation token.</param>
         /// <returns>Distinct related nodes mapped to <typeparamref name="TRelated"/>.</returns>
-        Task<IReadOnlyList<TRelated>> LoadRelatedNodesAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4, IAsyncTransaction? tx = null,
+        Task<IReadOnlyList<TRelated>> LoadNodesViaPathNoEdgesAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4, IAsyncTransaction? tx = null,
             CancellationToken ct = default)
             where TSource : GraphNode, new()
             where TRelated : GraphNode, new();
 
         /// <summary>
-        /// Loads the distinct ids of related <typeparamref name="TRelated"/> nodes reachable from a source node of type <typeparamref name="TSource"/>
-        /// via any of the supplied relationship types within the specified hop range. Unlike <see cref="LoadRelatedNodesAsync{TSource,TRelated}"/>
-        /// this returns only primary key values (ids) without hydrating full node objects – useful for lightweight relationship / cascade operations.
+        /// Traverses from a source node and returns only the distinct IDs of related nodes (no full node hydration, no edges).
+        /// Lightweight variant useful for relationship/cascade operations where you only need IDs.
         /// </summary>
-        /// <typeparam name="TSource">Source node label type (must derive from <see cref="GraphNode"/>).</typeparam>
-        /// <typeparam name="TRelated">Target/related node label type (must derive from <see cref="GraphNode"/>).</typeparam>
-        /// <param name="sourceId">Primary key value of the source node.</param>
+        /// <param name="fromNode">Source node instance.</param>
         /// <param name="relationshipTypes">Pipe (|) delimited list of relationship type names (e.g. "REL_A|REL_B").</param>
         /// <param name="minHops">Minimum traversal hops (inclusive).</param>
         /// <param name="maxHops">Maximum traversal hops (inclusive).</param>
         /// <param name="direction">Traversal direction relative to the source node (default Outgoing).</param>
         /// <param name="tx">Optional existing transaction to participate in; when null a temporary session/read tx is created.</param>
         /// <param name="ct">Cancellation token.</param>
-        /// <returns>Distinct related node id values.</returns>
-        Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
+        /// <returns>Distinct related node id values (no nodes or edges loaded).</returns>
+        Task<IReadOnlyList<string>> LoadNodeIdsViaPathNoEdgesAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
             EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
             where TRelated : GraphNode, new();
+
+        /// <summary>
+        /// Loads related nodes of type <typeparamref name="TRelated"/> reachable from a source node via specified relationship(s),
+        /// AND automatically populates all outgoing edge id lists and optional edge objects (like LoadAllAsync does).
+        /// This eliminates the need for custom ExecuteReadListAsync queries when you want related nodes WITH their edges loaded.
+        /// </summary>
+        /// <typeparam name="TSource">Source node label type (must derive from GraphNode).</typeparam>
+        /// <typeparam name="TRelated">Target/related node label type to return (must derive from GraphNode).</typeparam>
+        /// <param name="sourceId">Primary key value of the source node.</param>
+        /// <param name="relationshipTypes">Pipe (|) delimited list of relationship type names (e.g. "FOR_TEAM|ASSIGNED_TO").</param>
+        /// <param name="minHops">Minimum traversal hops (inclusive). Usually 1.</param>
+        /// <param name="maxHops">Maximum traversal hops (inclusive). Keep small (<=5) for performance.</param>
+        /// <param name="includeEdgeObjects">If true, populate edge object collections (requires CustomEdge types defined).</param>
+        /// <param name="includeEdges">Optional filter: only load specific edges by property/relationship name.</param>
+        /// <param name="tx">Optional existing transaction to participate in; when null a temporary session/read tx is created.</param>
+        /// <param name="ct">Cancellation token.</param>
+        /// <returns>Related nodes with all outgoing edges populated.</returns>
+        /// <example>
+        /// // Instead of: ExecuteReadListAsync("MATCH (role:Role)-[:FOR_TEAM]->(team:Team {id: $teamId}) RETURN role", ...)
+        /// // Use: LoadRelatedAsync&lt;Team, Role&gt;(teamId, "FOR_TEAM", minHops: 1, maxHops: 1, direction: EdgeDirection.Incoming)
+        /// </example>
+        Task<IReadOnlyList<TRelated>> LoadRelatedAsync<TSource, TRelated>(
+            string sourceId,
+            string relationshipTypes,
+            int minHops = 1,
+            int maxHops = 1,
+            bool includeEdgeObjects = false,
+            IEnumerable<string>? includeEdges = null,
+            EdgeDirection direction = EdgeDirection.Outgoing,
+            IAsyncTransaction? tx = null,
+            CancellationToken ct = default)
+            where TSource : GraphNode, new()
+            where TRelated : GraphNode, new();
+
+        /// <summary>
+        /// Loads related nodes reachable from a source node via specified relationships.
+        /// Alias for LoadRelatedAsync with simplified parameters.
+        /// </summary>
+        Task<IReadOnlyList<TRelated>> LoadRelatedNodesAsync<TSource, TRelated>(
+            string sourceId,
+            string relationshipTypes,
+            int minHops = 1,
+            int maxHops = 1,
+            IAsyncTransaction? tx = null,
+            CancellationToken ct = default)
+            where TSource : GraphNode, new()
+            where TRelated : GraphNode, new();
+
+        /// <summary>
+        /// Returns only the distinct IDs of related nodes (no full node hydration).
+        /// Alias for LoadNodeIdsViaPathNoEdgesAsync.
+        /// </summary>
+        Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(
+            GraphNode fromNode,
+            string relationshipTypes,
+            int minHops = 1,
+            int maxHops = 1,
+            EdgeDirection direction = EdgeDirection.Outgoing,
+            IAsyncTransaction? tx = null,
+            CancellationToken ct = default)
+            where TRelated : GraphNode, new();
+
+        /// <summary>
+        /// Hydrates object collections for a node that already has edge ID lists populated.
+        /// Takes a node with List&lt;string&gt; edge IDs (e.g. Topics, RelatedSections) and loads the actual objects
+        /// into corresponding collections (e.g. CoveredTopics, Sections).
+        /// </summary>
+        /// <typeparam name="T">Node type with relationship attributes</typeparam>
+        /// <param name="node">Node instance with ID lists populated (from LoadAsync, LoadAllAsync, etc.)</param>
+        /// <param name="edgesToLoad">Optional: specific edge property names to load. If null, loads all defined edges.</param>
+        /// <param name="tx">Optional transaction</param>
+        /// <param name="ct">Cancellation token</param>
+        /// <returns>Task completing when all edge objects are populated</returns>
+        /// <example>
+        /// var article = await repo.LoadAsync&lt;Article&gt;(articleId); // Topics populated with IDs
+        /// await repo.PopulateEdgeObjectsAsync(article, ["CoveredTopics"]); // Now CoveredTopics has Topic objects
+        /// </example>
+        Task PopulateEdgeObjectsAsync<T>(T node, IEnumerable<string>? edgesToLoad = null, IAsyncTransaction? tx = null, CancellationToken ct = default)
+            where T : GraphNode;
     }
 
     /// <summary>
@@ -635,7 +746,21 @@ namespace Neo4jLiteRepo
                     if (!string.IsNullOrWhiteSpace(propertyName))
                     {
                         var paramKey = string.IsNullOrEmpty(prefix) ? propertyName : $"{prefix}_{propertyName}";
-                        parameters[paramKey] = value ?? null;
+                        // Convert enums to strings for Neo4j compatibility
+                        var paramValue = value != null && value.GetType().IsEnum
+                            ? value.ToString()
+                            : value;
+
+                        // Debug logging for DateTime properties
+                        #if DEBUG
+                        if (property.PropertyType == typeof(DateTime) || property.PropertyType == typeof(DateTime?))
+                        {
+                            _logger.LogInformation("Processing DateTime property: {PropertyName}, Value: {Value}, Type: {Type}",
+                                propertyName, value, value?.GetType().Name ?? "null");
+                        }
+                        #endif
+
+                        parameters[paramKey] = paramValue ?? null;
                         setClauses.Add($"n.{propertyName} = ${paramKey}");
                     }
                 }
@@ -766,9 +891,19 @@ namespace Neo4jLiteRepo
                             var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToStringList), BindingFlags.Static | BindingFlags.Public)!;
                             convertedValueExpr = Expression.Call(helper, valueVar);
                         }
+                        else if (prop.PropertyType == typeof(DateTimeOffset?))
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToNullableDateTimeOffset), BindingFlags.Static | BindingFlags.Public)!;
+                            convertedValueExpr = Expression.Call(helper, valueVar);
+                        }
                         else if (prop.PropertyType == typeof(DateTimeOffset))
                         {
                             var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToDateTimeOffset), BindingFlags.Static | BindingFlags.Public)!;
+                            convertedValueExpr = Expression.Call(helper, valueVar);
+                        }
+                        else if (prop.PropertyType == typeof(DateTime?))
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToNullableDateTime), BindingFlags.Static | BindingFlags.Public)!;
                             convertedValueExpr = Expression.Call(helper, valueVar);
                         }
                         else if (prop.PropertyType == typeof(DateTime))
@@ -786,6 +921,21 @@ namespace Neo4jLiteRepo
                         {
                             var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToSequenceTextList), BindingFlags.Static | BindingFlags.Public)!;
                             convertedValueExpr = Expression.Call(helper, valueVar);
+                        }
+                        else if (prop.PropertyType.IsEnum)
+                        {
+                            // Handle enum conversion from string
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToEnum), BindingFlags.Static | BindingFlags.Public)!;
+                            var genericHelper = helper.MakeGenericMethod(prop.PropertyType);
+                            convertedValueExpr = Expression.Call(genericHelper, valueVar);
+                        }
+                        else if (Nullable.GetUnderlyingType(prop.PropertyType)?.IsEnum == true)
+                        {
+                            // Handle nullable enum conversion from string
+                            var underlyingEnumType = Nullable.GetUnderlyingType(prop.PropertyType)!;
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToNullableEnum), BindingFlags.Static | BindingFlags.Public)!;
+                            var genericHelper = helper.MakeGenericMethod(underlyingEnumType);
+                            convertedValueExpr = Expression.Call(genericHelper, valueVar);
                         }
                         else
                         {

@@ -56,6 +56,69 @@ public partial class Neo4jGenericRepo
 
     #endregion
 
+    #region EnforceUniqueConstraintsForAllGraphNodes
+
+    /// <summary>
+    /// Discovers all GraphNode implementations and enforces unique constraints for those that require it.
+    /// Call this at system startup to ensure all unique constraints are in place.
+    /// </summary>
+    /// <param name="assemblies">Optional list of assemblies to scan. If null, scans all loaded assemblies.</param>
+    /// <returns>True if all constraints were successfully created.</returns>
+    public async Task<bool> EnforceUniqueConstraintsForAllGraphNodes(IEnumerable<System.Reflection.Assembly>? assemblies = null)
+    {
+        await using var session = StartSession();
+        
+        // Get all assemblies to scan
+        var assembliesToScan = assemblies?.ToList() ?? AppDomain.CurrentDomain.GetAssemblies().ToList();
+        
+        // Find all types that inherit from GraphNode
+        var graphNodeTypes = assembliesToScan
+            .SelectMany(a =>
+            {
+                try
+                {
+                    return a.GetTypes();
+                }
+                catch (System.Reflection.ReflectionTypeLoadException)
+                {
+                    // Skip assemblies that can't be loaded
+                    return [];
+                }
+            })
+            .Where(t => t.IsClass && !t.IsAbstract && t.IsSubclassOf(typeof(GraphNode)))
+            .ToList();
+
+        _logger.LogInformation("Found {Count} GraphNode types to evaluate for unique constraints", graphNodeTypes.Count);
+
+        var constraintsCreated = 0;
+        foreach (var nodeType in graphNodeTypes)
+        {
+            try
+            {
+                // Create an instance to check if it requires unique constraint
+                if (Activator.CreateInstance(nodeType) is GraphNode instance)
+                {
+                    if (instance.EnforceUniqueConstraint)
+                    {
+                        var query = GetUniqueConstraintCypher(instance);
+                        await ExecuteWriteQuery(session, query);
+                        constraintsCreated++;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to create unique constraint for node type {NodeType}", nodeType.Name);
+                return false;
+            }
+        }
+
+        _logger.LogInformation("Successfully created/verified {Count} unique constraints", constraintsCreated);
+        return true;
+    }
+
+    #endregion
+
     #region CreateVectorIndexForEmbeddings
 
     /// <summary>

@@ -170,6 +170,36 @@ namespace Neo4jLiteRepo.Helpers
         }
 
         /// <summary>
+        /// Converts a value to nullable DateTimeOffset. Handles DateTime, strings and common temporal-like objects.
+        /// Returns null if the value is null or conversion fails.
+        /// </summary>
+        public static DateTimeOffset? ConvertToNullableDateTimeOffset(this object? value)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            var result = ConvertToDateTimeOffset(value);
+            return result == DateTimeOffset.MinValue ? null : result;
+        }
+
+        /// <summary>
+        /// Converts a value to nullable DateTime. Handles DateTimeOffset and string.
+        /// Returns null if the value is null or conversion fails.
+        /// </summary>
+        public static DateTime? ConvertToNullableDateTime(this object? value)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            var result = ConvertToDateTime(value);
+            return result == DateTime.MinValue ? null : result;
+        }
+
+        /// <summary>
         /// Converts a value to a List of string. Handles IEnumerable cases and scalar string.
         /// Returns empty list on failure.
         /// </summary>
@@ -271,6 +301,68 @@ namespace Neo4jLiteRepo.Helpers
                 // swallow – return what we have
             }
             return list;
+        }
+
+        /// <summary>
+        /// Converts a value to an enum of type TEnum. Handles string and numeric values.
+        /// Returns the default enum value (0) on failure.
+        /// </summary>
+        public static TEnum ConvertToEnum<TEnum>(this object value) where TEnum : struct, Enum
+        {
+            try
+            {
+                // If already the correct enum type
+                if (value is TEnum enumValue)
+                {
+                    return enumValue;
+                }
+
+                // Handle string conversion (case-insensitive)
+                if (value is string str && !string.IsNullOrWhiteSpace(str))
+                {
+                    if (Enum.TryParse<TEnum>(str, ignoreCase: true, out var parsed))
+                    {
+                        return parsed;
+                    }
+                }
+
+                // Handle numeric values
+                if (value is int or long or short or byte)
+                {
+                    return (TEnum)Enum.ToObject(typeof(TEnum), value);
+                }
+
+                // Try converting to underlying type and then to enum
+                var underlyingType = Enum.GetUnderlyingType(typeof(TEnum));
+                var converted = Convert.ChangeType(value, underlyingType);
+                return (TEnum)Enum.ToObject(typeof(TEnum), converted);
+            }
+            catch
+            {
+                // Return default value (typically 0)
+                return default;
+            }
+        }
+
+        /// <summary>
+        /// Converts a value to a nullable enum of type TEnum. Handles string and numeric values.
+        /// Returns null if the value is null or conversion fails.
+        /// </summary>
+        public static TEnum? ConvertToNullableEnum<TEnum>(this object? value) where TEnum : struct, Enum
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return ConvertToEnum<TEnum>(value);
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }
