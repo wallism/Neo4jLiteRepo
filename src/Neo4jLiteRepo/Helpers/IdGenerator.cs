@@ -7,7 +7,7 @@ namespace Neo4jLiteRepo.Helpers
     /// </summary>
     public static class IdGenerator
     {
-        private static readonly ILogger _logger = LoggingProvider.CreateLogger(typeof(IdGenerator).FullName);
+        private static readonly ILogger _logger = LoggingProvider.CreateLogger(typeof(IdGenerator).FullName ?? nameof(IdGenerator));
 
         /// <summary>
         /// Generates a deterministic ID from the provided text.

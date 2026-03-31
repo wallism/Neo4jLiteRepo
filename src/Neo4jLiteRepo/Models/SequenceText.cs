@@ -2,7 +2,7 @@ namespace Neo4jLiteRepo.Models;
 
 public class SequenceText
 {
-    public string Text { get; set; }
+    public required string Text { get; set; }
     public int Sequence { get; set; }
 
     public override string ToString() => $"[{Sequence}] {Text}";

@@ -53,9 +53,21 @@ public partial class Neo4jGenericRepo
     {
         ct.ThrowIfCancellationRequested();
         var cypher = BuildUpsertNodeQuery(node);
-        _logger.LogInformation("upsert ({label}:{pk})", node.LabelName, node.GetPrimaryKeyValue());
+        
+        // Don't log individual upserts for verbose node types (they're logged in batch)
+        if (!IsVerboseNodeType(node.LabelName))
+        {
+            _logger.LogInformation("upsert ({label}:{pk})", node.LabelName, node.GetPrimaryKeyValue());
+        }
+        
         return await tx.RunWriteAsync(cypher.Query, cypher.Parameters).ConfigureAwait(false);
     }
+    
+    /// <summary>
+    /// Determines if a node type uses throttled batch logging instead of per-node logging.
+    /// </summary>
+    private static bool IsVerboseNodeType(string labelName) =>
+        labelName is "Skill" or "SkillCategory" or "SkillSubCategory";
 
     #endregion
 
@@ -107,11 +119,30 @@ public partial class Neo4jGenericRepo
     public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes, IAsyncTransaction tx, CancellationToken ct = default) where T : GraphNode
     {
         List<IResultSummary> results = [];
-        foreach (var node in nodes)
+        var nodeList = nodes.ToList();
+        var labelName = nodeList.FirstOrDefault()?.LabelName ?? "";
+        
+        // Throttle logging for verbose node types (only log every 100)
+        var shouldThrottleLogging = labelName is "SkillCategory" or "SkillSubCategory";
+        var processedCount = 0;
+        var lastLogged = 0;
+        
+        foreach (var node in nodeList)
         {
             // UpsertNode handles its own cancellation check; no need to throw each iteration here.
             var cursor = await UpsertNode(node, tx, ct).ConfigureAwait(false);
             results.Add(cursor);
+            
+            if (shouldThrottleLogging)
+            {
+                processedCount++;
+                var currentMilestone = (processedCount / 100) * 100;
+                if (currentMilestone > lastLogged && currentMilestone > 0)
+                {
+                    _logger.LogInformation("Progress: {milestone} {label} nodes upserted", currentMilestone, labelName);
+                    lastLogged = currentMilestone;
+                }
+            }
         }
 
         return results;
@@ -641,10 +672,7 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc/>
     public async Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters, IAsyncSession session)
     {
-        return await session.ExecuteWriteAsync(async tx =>
-        {
-            return await ExecuteWriteQuery(tx, query, parameters ?? new Dictionary<string, object>());
-        });
+        return await session.ExecuteWriteAsync(async tx => await ExecuteWriteQuery(tx, query, parameters ?? new Dictionary<string, object>()));
     }
 
     #endregion

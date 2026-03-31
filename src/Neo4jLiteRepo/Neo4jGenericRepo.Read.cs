@@ -25,12 +25,25 @@ public partial class Neo4jGenericRepo
                 if (records.Count == 0)
                     return [];
 
-                // Assuming the returned value is a list of objects (like ["a", "b", "c"])
-                var list = records
-                    .SelectMany(x => x[returnObjectKey].As<List<string>>())
-                    .Distinct()
-                    .ToList();
-                return list;
+                // Handle both cases: single string per record OR list of strings per record
+                var list = new List<string>();
+                foreach (var record in records)
+                {
+                    var value = record[returnObjectKey];
+                    
+                    // Check if it's a list (from COLLECT in Cypher)
+                    if (value is IEnumerable<object> enumerable)
+                    {
+                        list.AddRange(enumerable.Select(x => x.ToString() ?? string.Empty));
+                    }
+                    else
+                    {
+                        // Single string value
+                        list.Add(value.As<string>());
+                    }
+                }
+                
+                return list.Distinct().ToList();
             });
 
             return result;

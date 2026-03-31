@@ -86,21 +86,6 @@ namespace Neo4jLiteRepo
         Task<bool> UpsertRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
 
         /// <summary>
-        /// Creates relationships for a single node using attribute-defined relationships.
-        /// </summary>
-        Task<bool> CreateRelationshipsAsync<T>(T node) where T : GraphNode;
-
-        /// <summary>
-        /// Creates relationships for a single node using the provided session.
-        /// </summary>
-        Task<bool> CreateRelationshipsAsync<T>(T node, IAsyncSession session) where T : GraphNode;
-
-        /// <summary>
-        /// Creates relationships for a collection of nodes using attribute-defined relationships.
-        /// </summary>
-        Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> nodes) where T : GraphNode;
-
-        /// <summary>
         /// Get a list of the names of all labels (node types) and their edges (in and out) as JSON.
         /// </summary>
         /// <remarks>Useful if you want to feed your graph map into AI.</remarks>
@@ -406,34 +391,6 @@ namespace Neo4jLiteRepo
             IAsyncTransaction? tx = null,
             CancellationToken ct = default)
             where TSource : GraphNode, new()
-            where TRelated : GraphNode, new();
-
-        /// <summary>
-        /// Loads related nodes reachable from a source node via specified relationships.
-        /// Alias for LoadRelatedAsync with simplified parameters.
-        /// </summary>
-        Task<IReadOnlyList<TRelated>> LoadRelatedNodesAsync<TSource, TRelated>(
-            string sourceId,
-            string relationshipTypes,
-            int minHops = 1,
-            int maxHops = 1,
-            IAsyncTransaction? tx = null,
-            CancellationToken ct = default)
-            where TSource : GraphNode, new()
-            where TRelated : GraphNode, new();
-
-        /// <summary>
-        /// Returns only the distinct IDs of related nodes (no full node hydration).
-        /// Alias for LoadNodeIdsViaPathNoEdgesAsync.
-        /// </summary>
-        Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(
-            GraphNode fromNode,
-            string relationshipTypes,
-            int minHops = 1,
-            int maxHops = 1,
-            EdgeDirection direction = EdgeDirection.Outgoing,
-            IAsyncTransaction? tx = null,
-            CancellationToken ct = default)
             where TRelated : GraphNode, new();
 
         /// <summary>
@@ -861,6 +818,10 @@ namespace Neo4jLiteRepo
 
             foreach (var prop in typeof(T).GetProperties().Where(p => p.SetMethod != null && p.SetMethod.IsPublic))
             {
+                // Only map scalar node properties. Relationship/navigation objects are hydrated separately.
+                if (!IsSupportedNodePropertyType(prop.PropertyType))
+                    continue;
+
                 try
                 {
                     var attr = prop.GetCustomAttribute<NodePropertyAttribute>();
@@ -889,6 +850,26 @@ namespace Neo4jLiteRepo
                         else if (prop.PropertyType == typeof(List<string>))
                         {
                             var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToStringList), BindingFlags.Static | BindingFlags.Public)!;
+                            convertedValueExpr = Expression.Call(helper, valueVar);
+                        }
+                        else if (prop.PropertyType == typeof(int?))
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToNullableInt), BindingFlags.Static | BindingFlags.Public)!;
+                            convertedValueExpr = Expression.Call(helper, valueVar);
+                        }
+                        else if (prop.PropertyType == typeof(int))
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToInt), BindingFlags.Static | BindingFlags.Public)!;
+                            convertedValueExpr = Expression.Call(helper, valueVar);
+                        }
+                        else if (prop.PropertyType == typeof(long?))
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToNullableLong), BindingFlags.Static | BindingFlags.Public)!;
+                            convertedValueExpr = Expression.Call(helper, valueVar);
+                        }
+                        else if (prop.PropertyType == typeof(long))
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToLong), BindingFlags.Static | BindingFlags.Public)!;
                             convertedValueExpr = Expression.Call(helper, valueVar);
                         }
                         else if (prop.PropertyType == typeof(DateTimeOffset?))
@@ -964,6 +945,34 @@ namespace Neo4jLiteRepo
             blockExpressions.Add(objVar);
             var body = Expression.Block([objVar, valueVar], blockExpressions);
             return Expression.Lambda<Func<INode, T>>(body, nodeParam).Compile();
+        }
+
+        private static bool IsSupportedNodePropertyType(Type propertyType)
+        {
+            var nonNullableType = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
+
+            if (nonNullableType == typeof(string) ||
+                nonNullableType == typeof(decimal) ||
+                nonNullableType == typeof(DateTime) ||
+                nonNullableType == typeof(DateTimeOffset) ||
+                nonNullableType == typeof(Guid))
+            {
+                return true;
+            }
+
+            if (nonNullableType.IsPrimitive || nonNullableType.IsEnum)
+                return true;
+
+            if (propertyType == typeof(float[]) ||
+                propertyType == typeof(List<string>) ||
+                propertyType.FullName == "Neo4jLiteRepo.Models.SequenceText")
+            {
+                return true;
+            }
+
+            return propertyType.IsGenericType &&
+                   propertyType.GetGenericTypeDefinition() == typeof(List<>) &&
+                   propertyType.GetGenericArguments()[0].FullName == "Neo4jLiteRepo.Models.SequenceText";
         }
 
         // Helper to obtain properties dictionary robustly across potential driver differences.

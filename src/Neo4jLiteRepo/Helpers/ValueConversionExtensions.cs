@@ -229,6 +229,78 @@ namespace Neo4jLiteRepo.Helpers
         }
 
         /// <summary>
+        /// Converts a value to int. Handles common numeric shapes and string representations.
+        /// Returns 0 on failure to keep mapping resilient.
+        /// </summary>
+        public static int ConvertToInt(this object value)
+        {
+            try
+            {
+                return Convert.ToInt32(value);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Converts a value to nullable int. Handles long inputs from Neo4j integers.
+        /// Returns null on failure.
+        /// </summary>
+        public static int? ConvertToNullableInt(this object? value)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return Convert.ToInt32(value);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Converts a value to long. Returns 0 on failure.
+        /// </summary>
+        public static long ConvertToLong(this object value)
+        {
+            try
+            {
+                return Convert.ToInt64(value);
+            }
+            catch
+            {
+                return 0L;
+            }
+        }
+
+        /// <summary>
+        /// Converts a value to nullable long. Returns null on failure.
+        /// </summary>
+        public static long? ConvertToNullableLong(this object? value)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return Convert.ToInt64(value);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Converts a raw Neo4j value (expected string) into a SequenceText instance.
         /// Since only the textual portion is persisted (sequence number discarded when writing),
         /// the Sequence is set to 0 by default. Returns a default object with empty text on failure.

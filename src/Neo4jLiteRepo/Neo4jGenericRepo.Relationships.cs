@@ -621,37 +621,6 @@ public partial class Neo4jGenericRepo
 
     #endregion
 
-    #region CreateRelationships (aliases for UpsertRelationships)
-
-    /// <summary>
-    /// Creates relationships for a single node using attribute-defined relationships.
-    /// Alias for UpsertRelationshipsAsync for backward compatibility.
-    /// </summary>
-    public async Task<bool> CreateRelationshipsAsync<T>(T node) where T : GraphNode
-    {
-        return await UpsertRelationshipsAsync(node);
-    }
-
-    /// <summary>
-    /// Creates relationships for a single node using the provided session.
-    /// Alias for UpsertRelationshipsAsync for backward compatibility.
-    /// </summary>
-    public async Task<bool> CreateRelationshipsAsync<T>(T node, IAsyncSession session) where T : GraphNode
-    {
-        return await UpsertRelationshipsAsync(node, session);
-    }
-
-    /// <summary>
-    /// Creates relationships for a collection of nodes using attribute-defined relationships.
-    /// Alias for UpsertRelationshipsAsync for backward compatibility.
-    /// </summary>
-    public async Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> nodes) where T : GraphNode
-    {
-        return await UpsertRelationshipsAsync(nodes);
-    }
-
-    #endregion
-
     #region LoadRelatedAsync (with edges)
 
     /// <summary>
@@ -826,60 +795,6 @@ public partial class Neo4jGenericRepo
 
         await using var session = StartSession();
         return await session.ExecuteReadAsync(async rtx => await ExecAsync(rtx));
-    }
-
-    #endregion
-
-    #region Alias Methods for Backward Compatibility
-
-    /// <summary>
-    /// Loads related nodes reachable from a source node via specified relationships.
-    /// Alias for LoadRelatedAsync with simplified parameters.
-    /// </summary>
-    public async Task<IReadOnlyList<TRelated>> LoadRelatedNodesAsync<TSource, TRelated>(
-        string sourceId,
-        string relationshipTypes,
-        int minHops = 1,
-        int maxHops = 1,
-        IAsyncTransaction? tx = null,
-        CancellationToken ct = default)
-        where TSource : GraphNode, new()
-        where TRelated : GraphNode, new()
-    {
-        return await LoadRelatedAsync<TSource, TRelated>(
-            sourceId,
-            relationshipTypes,
-            minHops,
-            maxHops,
-            includeEdgeObjects: false,
-            includeEdges: null,
-            direction: EdgeDirection.Outgoing,
-            tx,
-            ct);
-    }
-
-    /// <summary>
-    /// Returns only the distinct IDs of related nodes (no full node hydration).
-    /// Alias for LoadNodeIdsViaPathNoEdgesAsync.
-    /// </summary>
-    public async Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(
-        GraphNode fromNode,
-        string relationshipTypes,
-        int minHops = 1,
-        int maxHops = 1,
-        EdgeDirection direction = EdgeDirection.Outgoing,
-        IAsyncTransaction? tx = null,
-        CancellationToken ct = default)
-        where TRelated : GraphNode, new()
-    {
-        return await LoadNodeIdsViaPathNoEdgesAsync<TRelated>(
-            fromNode,
-            relationshipTypes,
-            minHops,
-            maxHops,
-            direction,
-            tx,
-            ct);
     }
 
     #endregion

@@ -14,5 +14,5 @@ public class NodeRelationshipsResponse
     /// <summary>
     /// Timestamp when the relationship data was queried.
     /// </summary>
-    public DateTime QueriedAt { get; set; }
+    public DateTimeOffset QueriedAt { get; set; }
 }

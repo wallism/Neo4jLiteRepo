@@ -273,7 +273,7 @@ public partial class Neo4jGenericRepo
             var records = await cursor.ToListAsync();
             var response = new NodeRelationshipsResponse
             {
-                QueriedAt = DateTime.UtcNow,
+                QueriedAt = DateTimeOffset.UtcNow,
                 NodeTypes = records.Select(record => new NodeRelationshipInfo
                 {
                     NodeType = record["NodeType"].As<string>(),

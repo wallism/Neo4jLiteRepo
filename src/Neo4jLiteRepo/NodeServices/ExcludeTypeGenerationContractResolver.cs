@@ -15,7 +15,7 @@ namespace Neo4jLiteRepo.NodeServices
             foreach (var property in properties)
             {
                 // Get the corresponding property info from the type
-                var propertyInfo = type.GetProperty(property.UnderlyingName);
+                var propertyInfo = property.UnderlyingName != null ? type.GetProperty(property.UnderlyingName) : null;
 
                 if (propertyInfo != null)
                 {
