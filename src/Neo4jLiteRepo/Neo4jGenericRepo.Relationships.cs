@@ -22,7 +22,7 @@ public partial class Neo4jGenericRepo
     {
         ct.ThrowIfCancellationRequested();
         await using var session = StartSession();
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = await BeginTransactionWithTimeoutAsync(session).ConfigureAwait(false);
         try
         {
             // Use new refactored method below
@@ -97,7 +97,7 @@ public partial class Neo4jGenericRepo
     {
         ct.ThrowIfCancellationRequested();
         await using var session = StartSession();
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = await BeginTransactionWithTimeoutAsync(session).ConfigureAwait(false);
         try
         {
             await DeleteRelationshipAsync(fromNode, rel, toNode, direction, tx, ct).ConfigureAwait(false);
@@ -328,22 +328,21 @@ public partial class Neo4jGenericRepo
     /// <inheritdoc/>
     public async Task<bool> UpsertRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode
     {
-        await using var session = StartSession();
-        foreach (var node in fromNodes)
+        var fromNodeList = fromNodes.ToList();
+        if (fromNodeList.Count == 0)
         {
-            var result = await UpsertRelationshipsAsync(node, session).ConfigureAwait(false);
-            if (!result)
-                return false; // exit on failure. (may want to continue on failure of individual nodes?)
+            return true;
         }
 
-        return true;
+        await using var session = StartSession();
+        return await UpsertRelationshipsAsync(fromNodeList, session).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public async Task<bool> UpsertRelationshipsAsync<T>(T fromNode) where T : GraphNode
     {
         await using var session = StartSession();
-        return await UpsertRelationshipsAsync(fromNode, session);
+        return await UpsertRelationshipsAsync([fromNode], session).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -351,7 +350,18 @@ public partial class Neo4jGenericRepo
     /// </summary>
     public async Task<bool> UpsertRelationshipsAsync<T>(T fromNode, IAsyncSession session) where T : GraphNode
     {
-        var nodeType = fromNode.GetType();
+        return await UpsertRelationshipsAsync([fromNode], session).ConfigureAwait(false);
+    }
+
+    private async Task<bool> UpsertRelationshipsAsync<T>(IReadOnlyCollection<T> fromNodes, IAsyncSession session) where T : GraphNode
+    {
+        if (fromNodes.Count == 0)
+        {
+            return true;
+        }
+
+        var nodeType = fromNodes.First().GetType();
+        var sampleNode = fromNodes.First();
         var properties = nodeType.GetProperties();
 
         foreach (var property in properties)
@@ -380,82 +390,180 @@ public partial class Neo4jGenericRepo
                 return false;
             }
 
-            var value = property.GetValue(fromNode);
-            if (value is not IEnumerable<string> relatedNodeIds)
-                continue;
-
-            // edges that have custom properties
-            List<CustomEdge> edgeSeeds = [];
-            if (seedEdgeType != null)
+            if (seedEdgeType == null)
             {
-                // Try to load edge data from DataSourceService
-                edgeSeeds = _dataSourceService.GetSourceEdgesFor<CustomEdge>(seedEdgeType.Name).ToList();
-                if (!edgeSeeds.Any())
-                {
-                    _logger.LogWarning("EdgeSeed type {seedEdgeType} specified but no edge data found in _dataSourceService.", seedEdgeType.Name);
-                }
+                await ExecuteSimpleRelationshipBatchAsync(
+                    sampleNode.LabelName,
+                    sampleNode.GetPrimaryKeyName(),
+                    relatedNodeTypeName,
+                    relationshipName,
+                    relatedNodeType,
+                    fromNodes,
+                    property,
+                    session).ConfigureAwait(false);
+
+                continue;
             }
 
-            // Simple relationships (string IDs)
-            foreach (var toNodeKey in relatedNodeIds)
+            // Edge property support still uses the existing per-edge flow.
+            var edgeSeeds = _dataSourceService.GetSourceEdgesFor<CustomEdge>(seedEdgeType.Name).ToList();
+            if (!edgeSeeds.Any())
             {
-                // stock standard relationship with no properties on the edge
-                if (seedEdgeType == null)
+                _logger.LogWarning("EdgeSeed type {seedEdgeType} specified but no edge data found in _dataSourceService.", seedEdgeType.Name);
+            }
+
+            foreach (var fromNode in fromNodes)
+            {
+                var value = property.GetValue(fromNode);
+                if (value is not IEnumerable<string> relatedNodeIds)
                 {
-                    await ExecuteUpsertRelationshipsAsync(fromNode,
+                    continue;
+                }
+
+                foreach (var toNodeKey in relatedNodeIds)
+                {
+                    var nodeEdgeSeeds = edgeSeeds.FindAll(seed =>
+                        seed.GetFromId() == fromNode.GetPrimaryKeyValue()
+                        && seed.GetToId() == toNodeKey);
+
+                    if (!nodeEdgeSeeds.Any())
+                        continue;
+
+                    if (nodeEdgeSeeds.Count > 1)
+                    {
+                        _logger.LogWarning("Multiple ({count}) edge seeds found for {fromNode}-{toNode} on relationship {relationship}. Using first.",
+                            nodeEdgeSeeds.Count, fromNode.GetPrimaryKeyValue(), toNodeKey, relationshipName);
+                    }
+
+                    var matchingEdge = nodeEdgeSeeds.First();
+
+                    var edgeParameters = new Dictionary<string, object?>();
+                    var edgeType = matchingEdge.GetType();
+                    List<string> setClauses = [];
+                    foreach (var prop in edgeType.GetProperties())
+                    {
+                        if (prop.Name.Equals("FromId") || prop.Name.Equals("ToId"))
+                            continue;
+                        if (Attribute.IsDefined(prop, typeof(EdgePropertyIgnoreAttribute)))
+                            continue;
+
+                        var propValue = prop.GetValue(matchingEdge);
+                        edgeParameters[prop.Name] = propValue;
+                        setClauses.Add($"rel.{prop.Name} = ${prop.Name}");
+                    }
+
+                    var setClause = setClauses.Count > 0
+                        ? "SET " + string.Join(", ", setClauses)
+                        : string.Empty;
+
+                    await ExecuteUpsertRelationshipsAsync(
+                        fromNode,
                         session,
                         relatedNodeType,
                         relationshipName,
                         toNodeKey,
-                        relatedNodeTypeName, [], string.Empty);
-                    continue;
+                        relatedNodeTypeName,
+                        edgeParameters,
+                        setClause).ConfigureAwait(false);
                 }
-
-                // get the edgeSeeds for this node
-                var nodeEdgeSeeds = edgeSeeds.FindAll(seed =>
-                    seed.GetFromId() == fromNode.GetPrimaryKeyValue()
-                    && seed.GetToId() == toNodeKey);
-
-                if (!nodeEdgeSeeds.Any())
-                    continue;
-
-                // should only be one, log if more than one
-                if (nodeEdgeSeeds.Count > 1)
-                {
-                    _logger.LogWarning("Multiple ({count}) edge seeds found for {fromNode}-{toNode} on relationship {relationship}. Using first.",
-                        nodeEdgeSeeds.Count, fromNode.GetPrimaryKeyValue(), toNodeKey, relationshipName);
-                }
-
-                var matchingEdge = nodeEdgeSeeds.First();
-
-                var edgeParameters = new Dictionary<string, object?>();
-                // create setClause and parameters for edge properties
-                var edgeType = matchingEdge.GetType();
-                List<string> setClauses = [];
-                foreach (var prop in edgeType.GetProperties())
-                {
-                    if (prop.Name.Equals("FromId") || prop.Name.Equals("ToId"))
-                        continue; // skip these
-                    if (Attribute.IsDefined(prop, typeof(EdgePropertyIgnoreAttribute)))
-                        continue;
-                    var propValue = prop.GetValue(matchingEdge);
-                    edgeParameters[prop.Name] = propValue;
-                    setClauses.Add($"rel.{prop.Name} = ${prop.Name}");
-                }
-
-                var setClause = setClauses.Count > 0
-                    ? "SET " + string.Join(", ", setClauses)
-                    : string.Empty;
-
-                await ExecuteUpsertRelationshipsAsync(fromNode,
-                    session,
-                    relatedNodeType,
-                    relationshipName,
-                    toNodeKey,
-                    relatedNodeTypeName, edgeParameters, setClause);
             }
         }
+
         return true;
+    }
+
+    private async Task ExecuteSimpleRelationshipBatchAsync<T>(
+        string fromLabelName,
+        string fromPrimaryKeyName,
+        string relatedNodeTypeName,
+        string relationshipName,
+        Type relatedNodeType,
+        IReadOnlyCollection<T> fromNodes,
+        PropertyInfo property,
+        IAsyncSession session) where T : GraphNode
+    {
+        var relatedPrimaryKeyName = "Id";
+        try
+        {
+            if (Activator.CreateInstance(relatedNodeType) is GraphNode tempInstance)
+            {
+                relatedPrimaryKeyName = tempInstance.GetPrimaryKeyName();
+            }
+        }
+        catch
+        {
+            // Fall back to "Id" if the node type cannot be constructed.
+        }
+
+        var pairKeys = new HashSet<string>(StringComparer.Ordinal);
+        var allPairs = new List<Dictionary<string, object>>();
+
+        foreach (var fromNode in fromNodes)
+        {
+            if (property.GetValue(fromNode) is not IEnumerable<string> relatedNodeIds)
+            {
+                continue;
+            }
+
+            foreach (var toNodeKey in relatedNodeIds.Where(id => !string.IsNullOrWhiteSpace(id)))
+            {
+                var pairKey = $"{fromNode.GetPrimaryKeyValue()}\u001F{toNodeKey}";
+                if (!pairKeys.Add(pairKey))
+                {
+                    continue;
+                }
+
+                allPairs.Add(new Dictionary<string, object>
+                {
+                    ["fromKey"] = fromNode.GetPrimaryKeyValue(),
+                    ["toKey"] = toNodeKey
+                });
+            }
+        }
+
+        if (allPairs.Count == 0)
+        {
+            return;
+        }
+
+        for (var i = 0; i < allPairs.Count; i += DefaultBatchSize)
+        {
+            var batch = allPairs.Skip(i).Take(DefaultBatchSize).ToList();
+            var cypher = BuildUpsertRelationshipBatchQuery(
+                fromLabelName,
+                fromPrimaryKeyName,
+                relatedNodeTypeName,
+                relatedPrimaryKeyName,
+                relationshipName,
+                batch);
+
+            await ExecuteWriteQuery(session, cypher.Query, cypher.Parameters).ConfigureAwait(false);
+        }
+    }
+
+    private CypherQuery BuildUpsertRelationshipBatchQuery(
+        string fromLabelName,
+        string fromPrimaryKeyName,
+        string toLabelName,
+        string toPrimaryKeyName,
+        string relationshipName,
+        IReadOnlyCollection<Dictionary<string, object>> pairs)
+    {
+        ValidateLabel(fromLabelName, nameof(fromLabelName));
+        ValidateLabel(toLabelName, nameof(toLabelName));
+        ValidateRel(relationshipName, nameof(relationshipName));
+
+        var query = $$"""
+                      UNWIND $pairs AS pair
+                      MATCH (from:{{fromLabelName}} {{{fromPrimaryKeyName}}: pair.fromKey})
+                      MATCH (to:{{toLabelName}} {{{toPrimaryKeyName}}: pair.toKey})
+                      MERGE (from)-[rel:{{relationshipName}}]->(to)
+                      """;
+
+        return new CypherQuery(query, new Dictionary<string, object>
+        {
+            ["pairs"] = pairs.ToList()
+        });
     }
 
     private async Task ExecuteUpsertRelationshipsAsync<T>(T fromNode, IAsyncSession session, Type relatedNodeType, string relationshipName,
@@ -606,7 +714,7 @@ public partial class Neo4jGenericRepo
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogError(ex, "LoadNodeIdsViaPathNoEdgesAsync failure. QueryLength={QueryLength}", query.Length);
-                throw new RepositoryException("Failed executing related node id list read.", query, parameters.Keys, ex);
+                throw CreateRepositoryException("Failed executing related node id list read.", query, parameters.Keys, ex);
             }
         }
 
@@ -616,7 +724,7 @@ public partial class Neo4jGenericRepo
         }
 
         await using var session = StartSession();
-        return await session.ExecuteReadAsync(async rtx => await ExecAsync(rtx));
+        return await ExecuteReadWithTimeoutAsync(session, async rtx => await ExecAsync(rtx));
     }
 
     #endregion
@@ -784,7 +892,7 @@ public partial class Neo4jGenericRepo
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogError(ex, "LoadRelatedAsync failure. QueryLength={QueryLength}", query.Length);
-                throw new RepositoryException("Failed executing related nodes load with edges.", query, parameters.Keys, ex);
+                throw CreateRepositoryException("Failed executing related nodes load with edges.", query, parameters.Keys, ex);
             }
         }
 
@@ -794,7 +902,7 @@ public partial class Neo4jGenericRepo
         }
 
         await using var session = StartSession();
-        return await session.ExecuteReadAsync(async rtx => await ExecAsync(rtx));
+        return await ExecuteReadWithTimeoutAsync(session, async rtx => await ExecAsync(rtx));
     }
 
     #endregion

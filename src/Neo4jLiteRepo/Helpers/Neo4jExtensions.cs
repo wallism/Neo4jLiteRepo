@@ -9,11 +9,11 @@ namespace Neo4jLiteRepo.Helpers
         /// Returns the ResultSummary so you can inspect counters, stats, etc.
         /// </summary>
         public static async Task<IResultSummary> RunWriteAsync(
-            this IAsyncTransaction tx,
+            this IAsyncQueryRunner runner,
             string query,
             object? parameters = null)
         {
-            var cursor = await tx.RunAsync(query, parameters);
+            var cursor = await runner.RunAsync(query, parameters);
             return await cursor.ConsumeAsync(); // ensures query is fully executed
         }
     }

@@ -34,6 +34,17 @@ public interface INeo4jReadRepository
     Task<IEnumerable<string>> ExecuteReadListStringsAsync(string query, string returnObjectKey, IDictionary<string, object>? parameters = null);
 
     /// <summary>
+    /// Executes a read query and returns a list of strings from the result, using a per-call transaction timeout.
+    /// </summary>
+    Task<IEnumerable<string>> ExecuteReadListStringsAsync(
+        string query,
+        string returnObjectKey,
+        IDictionary<string, object>? parameters,
+        TimeSpan? transactionTimeout,
+        string? operationName = null,
+        bool logTimingsAtInformation = false);
+
+    /// <summary>
     /// Executes a read query and returns a scalar value of type T.
     /// </summary>
     Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null);

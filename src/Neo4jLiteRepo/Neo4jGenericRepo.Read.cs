@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Neo4j.Driver;
 using Neo4jLiteRepo.Exceptions;
+using System.Diagnostics;
 
 namespace Neo4jLiteRepo;
 
@@ -13,17 +14,84 @@ public partial class Neo4jGenericRepo
 
     /// <inheritdoc/>
     public async Task<IEnumerable<string>> ExecuteReadListStringsAsync(string query, string returnObjectKey, IDictionary<string, object>? parameters = null)
+        => await ExecuteReadListStringsAsync(query, returnObjectKey, parameters, null);
+
+    /// <inheritdoc/>
+    public async Task<IEnumerable<string>> ExecuteReadListStringsAsync(
+        string query,
+        string returnObjectKey,
+        IDictionary<string, object>? parameters,
+        TimeSpan? transactionTimeout,
+        string? operationName = null,
+        bool logTimingsAtInformation = false)
     {
         await using var session = StartSession();
+        var started = Stopwatch.GetTimestamp();
         try
         {
             parameters ??= new Dictionary<string, object>();
+            var parameterKeys = string.Join(',', parameters.Keys);
+            var database = string.IsNullOrWhiteSpace(_databaseName) ? "default" : _databaseName;
+            var operation = string.IsNullOrWhiteSpace(operationName)
+                ? "ExecuteReadListStringsAsync"
+                : operationName;
+            var timeoutMs = transactionTimeout?.TotalMilliseconds;
 
-            var result = await session.ExecuteReadAsync(async tx =>
+            LogNeo4jReadTiming(
+                logTimingsAtInformation,
+                "Neo4j string-list read {OperationName} starting. Database={Database}, TimeoutMs={TimeoutMs}, QueryLength={QueryLength}, ParamKeys={ParamKeys}",
+                operation,
+                database,
+                timeoutMs,
+                query.Length,
+                parameterKeys);
+
+            var attempt = 0;
+            var result = await ExecuteReadWithTimeoutAsync(session, async tx =>
             {
-                var records = await RunReadQueryValidateAlias(tx, query, parameters, returnObjectKey);
+                attempt++;
+                LogNeo4jReadTiming(
+                    logTimingsAtInformation,
+                    "Neo4j string-list read {OperationName} attempt {Attempt} started. QueryLength={QueryLength}, ParamKeys={ParamKeys}",
+                    operation,
+                    attempt,
+                    query.Length,
+                    parameterKeys);
+
+                var runStarted = Stopwatch.GetTimestamp();
+                var cursor = await tx.RunAsync(query, parameters);
+                var runElapsedMs = (long)Stopwatch.GetElapsedTime(runStarted).TotalMilliseconds;
+                LogNeo4jReadTiming(
+                    logTimingsAtInformation,
+                    "Neo4j string-list read {OperationName} attempt {Attempt} query cursor opened. ElapsedMs={ElapsedMs}, QueryLength={QueryLength}, ParamKeys={ParamKeys}",
+                    operation,
+                    attempt,
+                    runElapsedMs,
+                    query.Length,
+                    parameterKeys);
+
+                var fetchStarted = Stopwatch.GetTimestamp();
+                var records = await cursor.ToListAsync();
+                var fetchElapsedMs = (long)Stopwatch.GetElapsedTime(fetchStarted).TotalMilliseconds;
+                LogNeo4jReadTiming(
+                    logTimingsAtInformation,
+                    "Neo4j string-list read {OperationName} attempt {Attempt} records fetched. ElapsedMs={ElapsedMs}, ResultCount={ResultCount}, QueryLength={QueryLength}, ParamKeys={ParamKeys}",
+                    operation,
+                    attempt,
+                    fetchElapsedMs,
+                    records.Count,
+                    query.Length,
+                    parameterKeys);
+
                 if (records.Count == 0)
                     return [];
+
+                if (!records[0].Keys.Contains(returnObjectKey))
+                {
+                    var available = string.Join(", ", records[0].Keys);
+                    throw new KeyNotFoundException(
+                        $"Return alias '{returnObjectKey}' not found. Available aliases: {available}. Ensure your Cypher uses 'RETURN <expr> AS {returnObjectKey}'. Query={query}");
+                }
 
                 // Handle both cases: single string per record OR list of strings per record
                 var list = new List<string>();
@@ -44,16 +112,55 @@ public partial class Neo4jGenericRepo
                 }
                 
                 return list.Distinct().ToList();
-            });
+            }, transactionTimeout);
+
+            LogNeo4jOperationDebug(
+                operation,
+                started,
+                resultCount: result.Count,
+                queryLength: query.Length,
+                parameterKeys: parameters.Keys);
+            if (logTimingsAtInformation)
+            {
+                _logger.LogInformation(
+                    "Neo4j string-list read {OperationName} completed. ElapsedMs={ElapsedMs}, Attempts={Attempts}, ResultCount={ResultCount}, TimeoutMs={TimeoutMs}, QueryLength={QueryLength}, ParamKeys={ParamKeys}",
+                    operation,
+                    (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                    attempt,
+                    result.Count,
+                    timeoutMs,
+                    query.Length,
+                    parameterKeys);
+            }
 
             return result;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Problem executing read list of strings. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length,
+            _logger.LogError(
+                ex,
+                "Problem executing Neo4j string-list read {OperationName}. ElapsedMs={ElapsedMs}, TimeoutMs={TimeoutMs}, QueryLength={QueryLength}, ParamKeys={ParamKeys}",
+                string.IsNullOrWhiteSpace(operationName) ? "ExecuteReadListStringsAsync" : operationName,
+                (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                transactionTimeout?.TotalMilliseconds,
+                query.Length,
                 string.Join(',', parameters?.Keys ?? []));
-            throw new RepositoryException("Read list (string) query failed.", query, parameters?.Keys ?? [], ex);
+            throw CreateRepositoryException("Read list (string) query failed.", query, parameters?.Keys ?? [], ex);
         }
+    }
+
+    private void LogNeo4jReadTiming(
+        bool logAtInformation,
+        string message,
+        params object?[] args)
+    {
+        if (logAtInformation)
+        {
+            _logger.LogInformation(message, args);
+            return;
+        }
+
+        _logger.LogDebug(message, args);
     }
 
     #endregion
@@ -75,11 +182,12 @@ public partial class Neo4jGenericRepo
         string returnObjectKey, IAsyncSession session, IDictionary<string, object>? parameters = null)
         where T : class, new()
     {
+        var started = Stopwatch.GetTimestamp();
         try
         {
             parameters ??= new Dictionary<string, object>();
 
-            var result = await session.ExecuteReadAsync(async tx =>
+            var result = await ExecuteReadWithTimeoutAsync(session, async tx =>
             {
                 var cursor = await tx.RunAsync(query, parameters);
                 List<T> list = [];
@@ -119,12 +227,19 @@ public partial class Neo4jGenericRepo
                 return list;
             });
 
+            LogNeo4jOperationDebug(
+                $"ExecuteReadListAsync<{typeof(T).Name}>",
+                started,
+                label: typeof(T).Name,
+                resultCount: result.Count,
+                queryLength: query.Length,
+                parameterKeys: parameters.Keys);
             return result;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Problem executing read list. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters?.Keys ?? []));
-            throw new RepositoryException("Read list query failed.", query, parameters?.Keys ?? [], ex);
+            throw CreateRepositoryException("Read list query failed.", query, parameters?.Keys ?? [], ex);
         }
     }
 
@@ -143,12 +258,12 @@ public partial class Neo4jGenericRepo
         IResultCursor? cursor = null;
         try
         {
-            cursor = await session.RunAsync(query, parameters);
+            cursor = await RunWithTimeoutAsync(session, query, parameters);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Problem starting streamed read. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters.Keys));
-            throw new RepositoryException("Read stream query failed (initialization).", query, parameters.Keys, ex);
+            throw CreateRepositoryException("Read stream query failed (initialization).", query, parameters.Keys, ex);
         }
 
         var aliasValidated = false;
@@ -183,23 +298,30 @@ public partial class Neo4jGenericRepo
     public async Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null)
     {
         await using var session = StartSession();
+        var started = Stopwatch.GetTimestamp();
         try
         {
             parameters ??= new Dictionary<string, object>();
 
-            var result = await session.ExecuteReadAsync(async tx =>
+            var result = await ExecuteReadWithTimeoutAsync(session, async tx =>
             {
                 var cursor = await tx.RunAsync(query, parameters);
                 var scalar = (await cursor.SingleAsync())[0].As<T>();
                 return scalar;
             });
 
+            LogNeo4jOperationDebug(
+                $"ExecuteReadScalarAsync<{typeof(T).Name}>",
+                started,
+                resultCount: 1,
+                queryLength: query.Length,
+                parameterKeys: parameters.Keys);
             return result;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Problem executing scalar read. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters?.Keys ?? []));
-            throw new RepositoryException("Read scalar query failed.", query, parameters?.Keys ?? [], ex);
+            throw CreateRepositoryException("Read scalar query failed.", query, parameters?.Keys ?? [], ex);
         }
     }
 
@@ -210,26 +332,49 @@ public partial class Neo4jGenericRepo
         string query, 
         IDictionary<string, object>? parameters = null, 
         CancellationToken ct = default)
+        => await ExecuteRawReadQueryAsync(query, parameters, null, ct);
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<IRecord>> ExecuteRawReadQueryAsync(
+        string query,
+        IDictionary<string, object>? parameters,
+        TimeSpan? transactionTimeout,
+        CancellationToken ct = default)
     {
         await using var session = StartSession();
+        var started = Stopwatch.GetTimestamp();
         try
         {
             parameters ??= new Dictionary<string, object>();
 
-            var result = await session.ExecuteReadAsync(async tx =>
-            {
-                var cursor = await tx.RunAsync(query, parameters);
-                var records = await cursor.ToListAsync(ct);
-                return (IReadOnlyList<IRecord>)records;
-            });
+            var result = await ExecuteReadWithTimeoutAsync(
+                session,
+                async tx =>
+                {
+                    var cursor = await tx.RunAsync(query, parameters);
+                    var records = await cursor.ToListAsync(ct);
+                    return (IReadOnlyList<IRecord>)records;
+                },
+                transactionTimeout);
 
+            LogNeo4jOperationDebug(
+                "ExecuteRawReadQueryAsync",
+                started,
+                resultCount: result.Count,
+                queryLength: query.Length,
+                parameterKeys: parameters.Keys);
             return result;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("Read query was canceled by the caller.");
+            throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Problem executing raw read query. QueryLength={QueryLength} ParamKeys={ParamKeys}", 
                 query.Length, string.Join(',', parameters?.Keys ?? []));
-            throw new RepositoryException("Raw read query failed.", query, parameters?.Keys ?? [], ex);
+            throw CreateRepositoryException("Raw read query failed.", query, parameters?.Keys ?? [], ex);
         }
     }
 
@@ -257,6 +402,7 @@ public partial class Neo4jGenericRepo
         where T : GraphNode
     {
         parameters ??= new Dictionary<string, object>();
+        var started = Stopwatch.GetTimestamp();
 
         async Task<IReadOnlyList<T>> InnerAsync(IAsyncQueryRunner r)
         {
@@ -282,12 +428,19 @@ public partial class Neo4jGenericRepo
                         .ToList();
                 }
 
+                LogNeo4jOperationDebug(
+                    $"ExecuteReadNodeQueryAsync<{typeof(T).Name}>",
+                    started,
+                    label: typeof(T).Name,
+                    resultCount: list.Count,
+                    queryLength: query.Length,
+                    parameterKeys: parameters.Keys);
                 return list;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogError(ex, "ExecuteReadNodeQueryAsync failure. Alias={Alias} QueryLength={QueryLength}", returnAlias, query.Length);
-                throw new RepositoryException("Failed executing node list read.", query, parameters.Keys, ex);
+                throw CreateRepositoryException("Failed executing node list read.", query, parameters.Keys, ex);
             }
         }
 
@@ -297,7 +450,7 @@ public partial class Neo4jGenericRepo
         }
 
         await using var session = StartSession();
-        return await session.ExecuteReadAsync(async tx => await InnerAsync(tx));
+        return await ExecuteReadWithTimeoutAsync(session, async tx => await InnerAsync(tx));
     }
 
     #endregion

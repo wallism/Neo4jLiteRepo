@@ -7,6 +7,7 @@ using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.Models;
 using Neo4jLiteRepo.NodeServices;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -32,6 +33,12 @@ namespace Neo4jLiteRepo
         Task<bool> CreateVectorIndexForEmbeddings(IList<string>? labelNames = null, int dimensions = 3072);
 
         Task<bool> EnforceUniqueConstraintsForAllGraphNodes(IEnumerable<System.Reflection.Assembly>? assemblies = null);
+
+        /// <summary>
+        /// Checks which expected unique constraints are missing from the database without creating anything.
+        /// Returns the constraint names that should exist but don't.
+        /// </summary>
+        Task<IReadOnlyList<string>> CheckMissingConstraintsAsync(IEnumerable<System.Reflection.Assembly>? assemblies = null);
 
         /// <summary>
         /// Convenience method - creates its own session
@@ -125,6 +132,17 @@ namespace Neo4jLiteRepo
         Task<IEnumerable<string>> ExecuteReadListStringsAsync(string query, string returnObjectKey, IDictionary<string, object>? parameters = null);
 
         /// <summary>
+        /// Executes a read query and returns a list of strings from the result, using a per-call transaction timeout.
+        /// </summary>
+        Task<IEnumerable<string>> ExecuteReadListStringsAsync(
+            string query,
+            string returnObjectKey,
+            IDictionary<string, object>? parameters,
+            TimeSpan? transactionTimeout,
+            string? operationName = null,
+            bool logTimingsAtInformation = false);
+
+        /// <summary>
         /// Executes a read query and returns a scalar value of type T.
         /// </summary>
         Task<T> ExecuteReadScalarAsync<T>(string query, IDictionary<string, object>? parameters = null);
@@ -135,9 +153,19 @@ namespace Neo4jLiteRepo
         Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters = null);
 
         /// <summary>
+        /// Executes a write query and returns the result summary, using a per-call transaction timeout.
+        /// </summary>
+        Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters, TimeSpan? transactionTimeout);
+
+        /// <summary>
         /// Executes a write query using the provided session and returns the result summary.
         /// </summary>
         Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters, IAsyncSession session);
+
+        /// <summary>
+        /// Executes a write query using the provided session and a per-call transaction timeout.
+        /// </summary>
+        Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters, IAsyncSession session, TimeSpan? transactionTimeout);
 
         /// <summary>
         /// Executes a raw Cypher read query and returns the raw records for custom processing.
@@ -147,6 +175,11 @@ namespace Neo4jLiteRepo
         /// <param name="ct">Cancellation token</param>
         /// <returns>List of raw Neo4j records</returns>
         Task<IReadOnlyList<IRecord>> ExecuteRawReadQueryAsync(string query, IDictionary<string, object>? parameters = null, CancellationToken ct = default);
+
+        /// <summary>
+        /// Executes a raw Cypher read query and returns the raw records, using a per-call transaction timeout.
+        /// </summary>
+        Task<IReadOnlyList<IRecord>> ExecuteRawReadQueryAsync(string query, IDictionary<string, object>? parameters, TimeSpan? transactionTimeout, CancellationToken ct = default);
 
         /// <summary>
         /// Executes a vector similarity search query to find relevant content chunks
@@ -423,20 +456,33 @@ namespace Neo4jLiteRepo
         private readonly IConfiguration _config;
         private readonly IDriver _neo4jDriver;
         private readonly IDataSourceService _dataSourceService;
+        private readonly INeo4jAvailabilityReporter _availabilityReporter;
         private readonly string? _databaseName;
+        private readonly TimeSpan? _transactionTimeout;
         private readonly HashSet<string> _detachDeleteWhitelist;
 
         public Neo4jGenericRepo(
             ILogger<Neo4jGenericRepo> logger,
             IConfiguration config,
             IDriver neo4jDriver,
-            IDataSourceService dataSourceService)
+            IDataSourceService dataSourceService,
+            INeo4jAvailabilityReporter? availabilityReporter = null)
         {
             _logger = logger;
             _config = config;
             _neo4jDriver = neo4jDriver;
             _dataSourceService = dataSourceService;
+            _availabilityReporter = availabilityReporter ?? NoOpNeo4jAvailabilityReporter.Instance;
             _databaseName = config["Neo4jSettings:Database"];
+            var transactionTimeoutSeconds = config.GetValue<int?>("Neo4jSettings:TransactionTimeoutSeconds") ?? 120;
+            if (transactionTimeoutSeconds < 0)
+            {
+                transactionTimeoutSeconds = 120;
+            }
+
+            _transactionTimeout = transactionTimeoutSeconds > 0
+                ? TimeSpan.FromSeconds(transactionTimeoutSeconds)
+                : null;
             
             // Load detach delete whitelist from configuration
             var whitelist = config.GetSection("Neo4jSettings:DetachDeleteWhitelist").Get<string[]>() ?? [];
@@ -470,12 +516,154 @@ namespace Neo4jLiteRepo
 
         protected string Now => DateTimeOffset.Now.ToLocalTime().ToString("O");
 
+        private static long GetElapsedMilliseconds(long startTimestamp)
+            => (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+
+        private void LogNeo4jOperationDebug(
+            string operation,
+            long startTimestamp,
+            string? label = null,
+            int? resultCount = null,
+            int? queryLength = null,
+            IEnumerable<string>? parameterKeys = null)
+        {
+            _availabilityReporter.ReportNeo4jSuccess();
+
+            _logger.LogDebug(
+                "Neo4j {Operation} completed. ElapsedMs={ElapsedMs}, Database={Database}, Label={Label}, ResultCount={ResultCount}, QueryLength={QueryLength}, ParamKeys={ParamKeys}",
+                operation,
+                GetElapsedMilliseconds(startTimestamp),
+                string.IsNullOrWhiteSpace(_databaseName) ? "default" : _databaseName,
+                label,
+                resultCount,
+                queryLength,
+                FormatParameterKeys(parameterKeys));
+        }
+
+        private static string FormatParameterKeys(IEnumerable<string>? parameterKeys)
+            => parameterKeys == null ? string.Empty : string.Join(',', parameterKeys);
+
+        private RepositoryException CreateRepositoryException(
+            string message,
+            string? query,
+            IEnumerable<string>? parameterKeys,
+            Exception? innerException)
+        {
+            var parameterKeyList = parameterKeys?.Distinct().ToArray() ?? [];
+
+            if (innerException is not null && Neo4jAvailabilityFailureDetector.IsUnavailableException(innerException))
+            {
+                _availabilityReporter.ReportNeo4jFailure(innerException);
+            }
+
+            if (innerException is not null && Neo4jAvailabilityFailureDetector.IsConnectionPoolAcquisitionTimeout(innerException))
+            {
+                _logger.LogWarning(
+                    innerException,
+                    "Neo4j connection pool acquisition timeout. RepositoryMessage={RepositoryMessage}, Database={Database}, QueryLength={QueryLength}, ParamKeys={ParamKeys}",
+                    message,
+                    string.IsNullOrWhiteSpace(_databaseName) ? "default" : _databaseName,
+                    query?.Length ?? 0,
+                    FormatParameterKeys(parameterKeyList));
+            }
+
+            return new RepositoryException(message, query, parameterKeyList, innerException);
+        }
+
+        private static IReadOnlyCollection<string> GetParameterKeys(object? parameters)
+        {
+            if (parameters == null)
+            {
+                return [];
+            }
+
+            if (parameters is IDictionary<string, object?> nullableDictionary)
+            {
+                return nullableDictionary.Keys.ToArray();
+            }
+
+            if (parameters is IDictionary<string, object> dictionary)
+            {
+                return dictionary.Keys.ToArray();
+            }
+
+            return parameters.GetType()
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Select(p => p.Name)
+                .ToArray();
+        }
+
         /// <inheritdoc/>
         public IAsyncSession StartSession()
         {
             return string.IsNullOrEmpty(_databaseName) 
                 ? _neo4jDriver.AsyncSession() 
                 : _neo4jDriver.AsyncSession(o => o.WithDatabase(_databaseName));
+        }
+
+        private Action<TransactionConfigBuilder>? CreateTransactionConfig(TimeSpan? transactionTimeout = null)
+            => (transactionTimeout ?? _transactionTimeout) is not { } resolvedTimeout || resolvedTimeout <= TimeSpan.Zero
+                ? null
+                : config => config.WithTimeout(resolvedTimeout);
+
+        private async Task<IAsyncTransaction> BeginTransactionWithTimeoutAsync(
+            IAsyncSession session,
+            TimeSpan? transactionTimeout = null)
+        {
+            var transactionConfig = CreateTransactionConfig(transactionTimeout);
+            return transactionConfig is null
+                ? await session.BeginTransactionAsync()
+                : await session.BeginTransactionAsync(transactionConfig);
+        }
+
+        private async Task<T> ExecuteReadWithTimeoutAsync<T>(
+            IAsyncSession session,
+            Func<IAsyncQueryRunner, Task<T>> work)
+            => await ExecuteReadWithTimeoutAsync(session, work, null);
+
+        private async Task<T> ExecuteReadWithTimeoutAsync<T>(
+            IAsyncSession session,
+            Func<IAsyncQueryRunner, Task<T>> work,
+            TimeSpan? transactionTimeout)
+        {
+            var transactionConfig = CreateTransactionConfig(transactionTimeout);
+            return transactionConfig is null
+                ? await session.ExecuteReadAsync(work)
+                : await session.ExecuteReadAsync(work, transactionConfig);
+        }
+
+        private async Task<T> ExecuteWriteWithTimeoutAsync<T>(
+            IAsyncSession session,
+            Func<IAsyncQueryRunner, Task<T>> work)
+            => await ExecuteWriteWithTimeoutAsync(session, work, null);
+
+        private async Task<T> ExecuteWriteWithTimeoutAsync<T>(
+            IAsyncSession session,
+            Func<IAsyncQueryRunner, Task<T>> work,
+            TimeSpan? transactionTimeout)
+        {
+            var transactionConfig = CreateTransactionConfig(transactionTimeout);
+            return transactionConfig is null
+                ? await session.ExecuteWriteAsync(work)
+                : await session.ExecuteWriteAsync(work, transactionConfig);
+        }
+
+        private async Task<IResultCursor> RunWithTimeoutAsync(
+            IAsyncSession session,
+            string query,
+            IDictionary<string, object> parameters)
+            => await RunWithTimeoutAsync(session, query, parameters, null);
+
+        private async Task<IResultCursor> RunWithTimeoutAsync(
+            IAsyncSession session,
+            string query,
+            IDictionary<string, object> parameters,
+            TimeSpan? transactionTimeout)
+        {
+            var transactionConfig = CreateTransactionConfig(transactionTimeout);
+            return transactionConfig is null
+                ? await session.RunAsync(query, parameters)
+                : await session.RunAsync(query, parameters, transactionConfig);
         }
 
         #endregion
@@ -487,7 +675,7 @@ namespace Neo4jLiteRepo
         /// </summary>
         private async Task<IResultSummary> ExecuteWriteQuery(IAsyncSession session, string query)
         {
-            return await session.ExecuteWriteAsync(async tx => await ExecuteWriteQuery(tx, query));
+            return await ExecuteWriteWithTimeoutAsync(session, async tx => await ExecuteWriteQuery(tx, query));
         }
 
         /// <summary>
@@ -495,10 +683,13 @@ namespace Neo4jLiteRepo
         /// </summary>
         private async Task<IResultSummary> ExecuteWriteQuery(IAsyncQueryRunner runner, string query)
         {
+            var started = Stopwatch.GetTimestamp();
             try
             {
                 var cursor = await runner.RunAsync(query, new { Now });
-                return await cursor.ConsumeAsync();
+                var summary = await cursor.ConsumeAsync();
+                LogNeo4jOperationDebug("ExecuteWriteQuery", started, queryLength: query.Length, parameterKeys: ["Now"]);
+                return summary;
             }
             catch (AuthenticationException authEx)
             {
@@ -515,7 +706,7 @@ namespace Neo4jLiteRepo
                 // only write to console in case there are secrets in the query
                 Console.WriteLine($"**** write query failed ****{query}");
                 _logger.LogError(ex, "ExecuteWriteQuery (runner) failure. QueryLength={QueryLength}", query.Length);
-                throw new RepositoryException("Failed executing write query (runner).", query, ["Now"], ex);
+                throw CreateRepositoryException("Failed executing write query (runner).", query, ["Now"], ex);
             }
         }
 
@@ -524,6 +715,8 @@ namespace Neo4jLiteRepo
         /// </summary>
         private async Task<IResultSummary> ExecuteWriteQuery(IAsyncQueryRunner runner, string query, object parameters)
         {
+            var started = Stopwatch.GetTimestamp();
+            var parameterKeys = GetParameterKeys(parameters);
             try
             {
                 // If caller supplies a dictionary, add Now directly
@@ -553,7 +746,9 @@ namespace Neo4jLiteRepo
                 }
 
                 var cursor = await runner.RunAsync(query, finalParams);
-                return await cursor.ConsumeAsync();
+                var summary = await cursor.ConsumeAsync();
+                LogNeo4jOperationDebug("ExecuteWriteQuery", started, queryLength: query.Length, parameterKeys: parameterKeys);
+                return summary;
             }
             catch (AuthenticationException authEx)
             {
@@ -568,10 +763,12 @@ namespace Neo4jLiteRepo
             catch (Exception ex)
             {
                 Console.WriteLine($"**** write query failed ****{query}");
-                _logger.LogError(ex, "ExecuteWriteQuery (runner/param) failure. QueryLength={QueryLength}", query.Length);
-                // Attempt to surface parameter property names (best-effort)
-                var paramNames = parameters.GetType().GetProperties().Select(p => p.Name).ToArray();
-                throw new RepositoryException("Failed executing write query (runner/param).", query, paramNames, ex);
+                _logger.LogError(
+                    ex,
+                    "ExecuteWriteQuery (runner/param) failure. QueryLength={QueryLength} ParamKeys={ParamKeys}",
+                    query.Length,
+                    FormatParameterKeys(parameterKeys));
+                throw CreateRepositoryException("Failed executing write query (runner/param).", query, parameterKeys, ex);
             }
         }
 
@@ -625,34 +822,93 @@ namespace Neo4jLiteRepo
         /// </summary>
         private CypherQuery BuildUpsertNodeQuery<T>(T node) where T : GraphNode
         {
-            // Build parameterized Cypher query and parameter map
+            var parameters = GetNodePropertiesDictionary(node);
+            var now = DateTimeOffset.UtcNow;
+
+            var query = $$"""
+                          MERGE (n:{{node.LabelName}} {{{node.GetPrimaryKeyName()}}: ${{node.GetPrimaryKeyName()}} })
+                          ON CREATE SET n.created = $now
+                          SET n += $properties
+                          """;
+
+            return new CypherQuery(query, new Dictionary<string, object>
+            {
+                [node.GetPrimaryKeyName()] = node.GetPrimaryKeyValue(),
+                ["now"] = now,
+                ["properties"] = ToCypherParameterDictionary(parameters)
+            });
+        }
+
+        private CypherQuery BuildUpsertNodesBatchQuery<T>(IReadOnlyCollection<T> nodes) where T : GraphNode
+        {
+            if (nodes.Count == 0)
+                throw new ArgumentException("At least one node is required for batch upsert.", nameof(nodes));
+
+            var sample = nodes.First();
+            var labelName = sample.LabelName;
+            var primaryKeyName = sample.GetPrimaryKeyName();
+
+            ValidateLabel(labelName, nameof(labelName));
+
+            var rows = new List<Dictionary<string, object?>>(nodes.Count);
+            foreach (var node in nodes)
+            {
+                if (!string.Equals(node.LabelName, labelName, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Batch upsert requires a consistent label. Expected '{labelName}', got '{node.LabelName}'.");
+                }
+
+                if (!string.Equals(node.GetPrimaryKeyName(), primaryKeyName, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Batch upsert requires a consistent primary key. Expected '{primaryKeyName}', got '{node.GetPrimaryKeyName()}'.");
+                }
+
+                rows.Add(new Dictionary<string, object?>
+                {
+                    ["primaryKeyValue"] = node.GetPrimaryKeyValue(),
+                    ["createdAt"] = DateTimeOffset.UtcNow,
+                    ["properties"] = GetNodePropertiesDictionary(node)
+                });
+            }
+
+            var query = $$"""
+                          UNWIND $rows AS row
+                          MERGE (n:{{labelName}} {{{primaryKeyName}}: row.primaryKeyValue })
+                          ON CREATE SET n.created = row.createdAt
+                          SET n += row.properties
+                          """;
+
+            return new CypherQuery(query, new Dictionary<string, object>
+            {
+                ["rows"] = rows
+            });
+        }
+
+        private Dictionary<string, object?> GetNodePropertiesDictionary<T>(T node) where T : GraphNode
+        {
             var parameters = new Dictionary<string, object?>
             {
                 [node.GetPrimaryKeyName()] = node.GetPrimaryKeyValue(),
-                ["displayName"] = node.DisplayName,
-                ["now"] = DateTimeOffset.UtcNow,
+                [node.NodeDisplayNameProperty] = node.DisplayName,
                 ["upserted"] = DateTimeOffset.UtcNow
             };
 
-            List<string> setClauses =
-            [
-                $"n.{node.GetPrimaryKeyName()} = ${node.GetPrimaryKeyName()}",
-                $"n.{node.NodeDisplayNameProperty} = $displayName"
-            ];
-
-            // Recursive flattening logic for container properties
             void AddNodePropertiesRecursive(object? obj, int depth, string prefix = "")
             {
                 if (obj == null || depth <= 0) return;
+
                 var properties = obj.GetType().GetProperties()
                     .Where(p => p.GetCustomAttribute<NodePropertyAttribute>() != null);
+
                 foreach (var property in properties)
                 {
                     var attribute = property.GetCustomAttribute<NodePropertyAttribute>();
                     if (attribute == null || attribute.Exclude) continue;
+
                     var propertyName = attribute.PropertyName;
                     var value = property.GetValue(obj);
-                    // Flatten container objects: [NodeProperty("")]
                     if (value != null
                         && string.IsNullOrWhiteSpace(propertyName)
                         && !IsSimpleType(value.GetType())
@@ -662,82 +918,58 @@ namespace Neo4jLiteRepo
                         continue;
                     }
 
-                    // Always update upserted
-                    if (!string.IsNullOrWhiteSpace(propertyName) && propertyName.Equals("upserted", StringComparison.InvariantCultureIgnoreCase))
+                    if (string.IsNullOrWhiteSpace(propertyName))
                     {
-                        parameters["upserted"] = DateTimeOffset.UtcNow;
-                        setClauses.Add("n.upserted = $upserted");
                         continue;
                     }
 
-                    // Special handling for IEnumerable<SequenceText>
-                    if (!string.IsNullOrWhiteSpace(propertyName) && value is IEnumerable<SequenceText> seqEnum)
-                    {
-                        // Flatten SequenceText collection into a single comma separated string (requested behavior)
-                        // Note: Neo4j does support list properties, but storing as a single string here per requirement.
-                        var ordered = seqEnum
-                            .Where(st => st != null && !string.IsNullOrWhiteSpace(st.Text))
-                            .OrderBy(st => st.Sequence)
-                            .Select(st => st.Text?.Trim())
-                            .Where(t => !string.IsNullOrWhiteSpace(t))
-                            .ToList();
-
-                        var joined = ordered.Count == 0 ? null : string.Join(", ", ordered);
-                        var paramKey = string.IsNullOrEmpty(prefix) ? propertyName : $"{prefix}_{propertyName}";
-                        parameters[paramKey] = joined;
-                        setClauses.Add($"n.{propertyName} = ${paramKey}");
-                        continue;
-                    }
-
-                    // Special handling for single SequenceText instance
-                    if (!string.IsNullOrWhiteSpace(propertyName) && value is SequenceText seqSingle)
-                    {
-                        var text = string.IsNullOrWhiteSpace(seqSingle.Text) ? null : seqSingle.Text.Trim();
-                        var paramKey = string.IsNullOrEmpty(prefix) ? propertyName : $"{prefix}_{propertyName}";
-                        parameters[paramKey] = text; // store primitive string or null
-                        setClauses.Add($"n.{propertyName} = ${paramKey}");
-                        continue;
-                    }
-
-                    // Parameterize all other values, skip if no propertyName
-                    if (!string.IsNullOrWhiteSpace(propertyName))
-                    {
-                        var paramKey = string.IsNullOrEmpty(prefix) ? propertyName : $"{prefix}_{propertyName}";
-                        // Convert enums to strings for Neo4j compatibility
-                        var paramValue = value != null && value.GetType().IsEnum
-                            ? value.ToString()
-                            : value;
-
-                        // Debug logging for DateTime properties
-                        #if DEBUG
-                        if (property.PropertyType == typeof(DateTime) || property.PropertyType == typeof(DateTime?))
-                        {
-                            _logger.LogInformation("Processing DateTime property: {PropertyName}, Value: {Value}, Type: {Type}",
-                                propertyName, value, value?.GetType().Name ?? "null");
-                        }
-                        #endif
-
-                        parameters[paramKey] = paramValue ?? null;
-                        setClauses.Add($"n.{propertyName} = ${paramKey}");
-                    }
+                    var paramKey = string.IsNullOrEmpty(prefix) ? propertyName : $"{prefix}_{propertyName}";
+                    parameters[paramKey] = NormalizeNodePropertyValue(value);
                 }
             }
 
             AddNodePropertiesRecursive(node, 5);
+            return parameters;
+        }
 
-            var query = $$"""
-                          MERGE (n:{{node.LabelName}} {{{node.GetPrimaryKeyName()}}: ${{node.GetPrimaryKeyName()}} })
-                          ON CREATE SET n.created = $now
-                          SET
-                            {{string.Join(",\n  ", setClauses)}}
-                          """;
-            // Cast to required non-nullable dictionary type for CypherQuery
-            var nonNullParams = new Dictionary<string, object>();
+        private static object? NormalizeNodePropertyValue(object? value)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            if (value is IEnumerable<SequenceText> seqEnum)
+            {
+                var ordered = seqEnum
+                    .Where(st => st != null && !string.IsNullOrWhiteSpace(st.Text))
+                    .OrderBy(st => st.Sequence)
+                    .Select(st => st.Text?.Trim())
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .ToList();
+
+                return ordered.Count == 0 ? null : string.Join(", ", ordered);
+            }
+
+            if (value is SequenceText seqSingle)
+            {
+                return string.IsNullOrWhiteSpace(seqSingle.Text) ? null : seqSingle.Text.Trim();
+            }
+
+            return value.GetType().IsEnum
+                ? value.ToString()
+                : value;
+        }
+
+        private static Dictionary<string, object> ToCypherParameterDictionary(IDictionary<string, object?> parameters)
+        {
+            var nonNullParams = new Dictionary<string, object>(parameters.Count);
             foreach (var kv in parameters)
             {
-                nonNullParams[kv.Key] = kv.Value!; // values can be null in Cypher params; driver accepts boxed nulls
+                nonNullParams[kv.Key] = kv.Value!;
             }
-            return new CypherQuery(query, nonNullParams);
+
+            return nonNullParams;
         }
 
         private static bool IsSimpleType(Type type)
@@ -916,6 +1148,24 @@ namespace Neo4jLiteRepo
                             var underlyingEnumType = Nullable.GetUnderlyingType(prop.PropertyType)!;
                             var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToNullableEnum), BindingFlags.Static | BindingFlags.Public)!;
                             var genericHelper = helper.MakeGenericMethod(underlyingEnumType);
+                            convertedValueExpr = Expression.Call(genericHelper, valueVar);
+                        }
+                        else if (Nullable.GetUnderlyingType(prop.PropertyType) is { } nullableStructType &&
+                                 nullableStructType != typeof(DateTimeOffset) &&
+                                 nullableStructType != typeof(DateTime) &&
+                                 nullableStructType != typeof(Guid))
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToNullableStruct), BindingFlags.Static | BindingFlags.Public)!;
+                            var genericHelper = helper.MakeGenericMethod(nullableStructType);
+                            convertedValueExpr = Expression.Call(genericHelper, valueVar);
+                        }
+                        else if (prop.PropertyType.IsValueType &&
+                                 prop.PropertyType != typeof(DateTimeOffset) &&
+                                 prop.PropertyType != typeof(DateTime) &&
+                                 prop.PropertyType != typeof(Guid))
+                        {
+                            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToStruct), BindingFlags.Static | BindingFlags.Public)!;
+                            var genericHelper = helper.MakeGenericMethod(prop.PropertyType);
                             convertedValueExpr = Expression.Call(genericHelper, valueVar);
                         }
                         else

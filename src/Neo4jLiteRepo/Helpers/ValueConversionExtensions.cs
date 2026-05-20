@@ -301,6 +301,53 @@ namespace Neo4jLiteRepo.Helpers
         }
 
         /// <summary>
+        /// Converts a value to a non-nullable struct using <see cref="Convert.ChangeType(object, Type)"/>.
+        /// Returns the default value on failure.
+        /// </summary>
+        public static T ConvertToStruct<T>(this object value) where T : struct
+        {
+            try
+            {
+                if (value is T typedValue)
+                {
+                    return typedValue;
+                }
+
+                return (T)Convert.ChangeType(value, typeof(T));
+            }
+            catch
+            {
+                return default;
+            }
+        }
+
+        /// <summary>
+        /// Converts a value to a nullable struct using <see cref="Convert.ChangeType(object, Type)"/>.
+        /// Returns null on failure.
+        /// </summary>
+        public static T? ConvertToNullableStruct<T>(this object? value) where T : struct
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                if (value is T typedValue)
+                {
+                    return typedValue;
+                }
+
+                return (T)Convert.ChangeType(value, typeof(T));
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Converts a raw Neo4j value (expected string) into a SequenceText instance.
         /// Since only the textual portion is persisted (sequence number discarded when writing),
         /// the Sequence is set to 0 by default. Returns a default object with empty text on failure.

@@ -34,7 +34,7 @@ public static class Neo4jSessionHelper
         Func<IAsyncTransaction, Task<T>> work,
         CancellationToken ct = default)
     {
-        var tx = await session.BeginTransactionAsync();
+        await using var tx = await session.BeginTransactionAsync();
         try
         {
             ct.ThrowIfCancellationRequested();
@@ -70,7 +70,7 @@ public static class Neo4jSessionHelper
         Func<IAsyncTransaction, Task> work,
         CancellationToken ct = default)
     {
-        var tx = await session.BeginTransactionAsync();
+        await using var tx = await session.BeginTransactionAsync();
         try
         {
             ct.ThrowIfCancellationRequested();
@@ -105,7 +105,7 @@ public static class Neo4jSessionHelper
         Func<IAsyncTransaction, Task<T>> work,
         CancellationToken ct = default)
     {
-        var tx = await session.BeginTransactionAsync();
+        await using var tx = await session.BeginTransactionAsync();
         try
         {
             ct.ThrowIfCancellationRequested();

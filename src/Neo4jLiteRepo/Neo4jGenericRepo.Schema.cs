@@ -119,6 +119,50 @@ public partial class Neo4jGenericRepo
 
     #endregion
 
+    #region CheckMissingConstraintsAsync
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<string>> CheckMissingConstraintsAsync(IEnumerable<System.Reflection.Assembly>? assemblies = null)
+    {
+        // Query names of all existing constraints from Neo4j
+        var existingNames = (await ExecuteReadListStringsAsync("SHOW CONSTRAINTS YIELD name", "name"))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Derive expected constraint names from all concrete GraphNode subclasses
+        var assembliesToScan = assemblies?.ToList() ?? AppDomain.CurrentDomain.GetAssemblies().ToList();
+        var graphNodeTypes = assembliesToScan
+            .SelectMany(a =>
+            {
+                try { return a.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException) { return []; }
+            })
+            .Where(t => t.IsClass && !t.IsAbstract && t.IsSubclassOf(typeof(GraphNode)))
+            .ToList();
+
+        var missing = new List<string>();
+        foreach (var nodeType in graphNodeTypes)
+        {
+            try
+            {
+                if (Activator.CreateInstance(nodeType) is GraphNode instance && instance.EnforceUniqueConstraint)
+                {
+                    // Must match the naming pattern in GetUniqueConstraintCypher
+                    var expectedName = $"{instance.LabelName.ToLower()}_{instance.GetPrimaryKeyName().ToLower()}_is_unique";
+                    if (!existingNames.Contains(expectedName))
+                        missing.Add(expectedName);
+                }
+            }
+            catch
+            {
+                // Skip types that cannot be instantiated (missing deps, not concrete, etc.)
+            }
+        }
+
+        return missing;
+    }
+
+    #endregion
+
     #region CreateVectorIndexForEmbeddings
 
     /// <summary>
@@ -260,12 +304,12 @@ public partial class Neo4jGenericRepo
         IResultCursor cursor;
         try
         {
-            cursor = await session.RunAsync(query, parameters);
+            cursor = await RunWithTimeoutAsync(session, query, parameters);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Problem running GetNodesAndRelationships query. QueryLength={QueryLength} ParamKeys={ParamKeys}", query.Length, string.Join(',', parameters.Keys));
-            throw new RepositoryException("Get nodes and relationships failed.", query, parameters.Keys, ex);
+            throw CreateRepositoryException("Get nodes and relationships failed.", query, parameters.Keys, ex);
         }
 
         try
@@ -286,7 +330,7 @@ public partial class Neo4jGenericRepo
         catch (Exception ex)
         {
             _logger.LogError(ex, "Problem materializing records for GetNodesAndRelationships. QueryLength={QueryLength}", query.Length);
-            throw new RepositoryException("Get nodes and relationships materialization failed.", query, parameters.Keys, ex);
+            throw CreateRepositoryException("Get nodes and relationships materialization failed.", query, parameters.Keys, ex);
         }
     }
 

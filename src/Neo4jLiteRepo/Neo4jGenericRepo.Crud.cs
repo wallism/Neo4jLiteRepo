@@ -4,6 +4,7 @@ using Neo4jLiteRepo.Attributes;
 using Neo4jLiteRepo.Exceptions;
 using Neo4jLiteRepo.Helpers;
 using Neo4jLiteRepo.Models;
+using System.Diagnostics;
 using System.Reflection;
 
 namespace Neo4jLiteRepo;
@@ -33,23 +34,23 @@ public partial class Neo4jGenericRepo
     public async Task<IResultSummary> UpsertNode<T>(T node, IAsyncSession session, CancellationToken ct = default) where T : GraphNode
     {
         _logger.LogInformation("({label}:{node})", node.LabelName, node.DisplayName);
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
-            var result = await UpsertNode(node, tx, ct).ConfigureAwait(false);
-            await tx.CommitAsync().ConfigureAwait(false);
-            return result;
+            return await ExecuteWriteWithTimeoutAsync(session, async tx =>
+                await ExecuteUpsertNodeAsync(node, tx, ct).ConfigureAwait(false)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to upsert node {Label}:{DisplayName}", node.LabelName, node.DisplayName);
-            await tx.RollbackAsync().ConfigureAwait(false);
             throw;
         }
     }
 
     /// <inheritdoc/>
     public async Task<IResultSummary> UpsertNode<T>(T node, IAsyncTransaction tx, CancellationToken ct = default) where T : GraphNode
+        => await ExecuteUpsertNodeAsync(node, tx, ct).ConfigureAwait(false);
+
+    private async Task<IResultSummary> ExecuteUpsertNodeAsync<T>(T node, IAsyncQueryRunner runner, CancellationToken ct = default) where T : GraphNode
     {
         ct.ThrowIfCancellationRequested();
         var cypher = BuildUpsertNodeQuery(node);
@@ -60,7 +61,7 @@ public partial class Neo4jGenericRepo
             _logger.LogInformation("upsert ({label}:{pk})", node.LabelName, node.GetPrimaryKeyValue());
         }
         
-        return await tx.RunWriteAsync(cypher.Query, cypher.Parameters).ConfigureAwait(false);
+        return await runner.RunWriteAsync(cypher.Query, cypher.Parameters).ConfigureAwait(false);
     }
     
     /// <summary>
@@ -92,55 +93,54 @@ public partial class Neo4jGenericRepo
     /// </summary>
     public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes, IAsyncSession session, CancellationToken ct = default) where T : GraphNode
     {
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
         try
         {
-            var result = await UpsertNodes(nodes, tx, ct);
-            await tx.CommitAsync().ConfigureAwait(false);
-            return result;
+            return await ExecuteWriteWithTimeoutAsync(session, async tx =>
+                await ExecuteUpsertNodesAsync(nodes, tx, ct).ConfigureAwait(false)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to upsert nodes");
-            try
-            {
-                await tx.RollbackAsync().ConfigureAwait(false);
-            }
-            catch (Exception rollbackEx)
-            {
-                _logger.LogWarning(rollbackEx, "Rollback failed after upsert nodes error");
-            }
-
             throw;
         }
     }
 
     /// <inheritdoc/>
     public async Task<IEnumerable<IResultSummary>> UpsertNodes<T>(IEnumerable<T> nodes, IAsyncTransaction tx, CancellationToken ct = default) where T : GraphNode
+        => await ExecuteUpsertNodesAsync(nodes, tx, ct).ConfigureAwait(false);
+
+    private async Task<IEnumerable<IResultSummary>> ExecuteUpsertNodesAsync<T>(IEnumerable<T> nodes, IAsyncQueryRunner runner, CancellationToken ct = default) where T : GraphNode
     {
-        List<IResultSummary> results = [];
         var nodeList = nodes.ToList();
+        if (nodeList.Count == 0)
+        {
+            return [];
+        }
+
+        List<IResultSummary> results = [];
         var labelName = nodeList.FirstOrDefault()?.LabelName ?? "";
-        
-        // Throttle logging for verbose node types (only log every 100)
+
         var shouldThrottleLogging = labelName is "SkillCategory" or "SkillSubCategory";
         var processedCount = 0;
-        var lastLogged = 0;
-        
-        foreach (var node in nodeList)
+        var lastLoggedMilestone = 0;
+
+        foreach (var batch in nodeList.Chunk(DefaultBatchSize))
         {
-            // UpsertNode handles its own cancellation check; no need to throw each iteration here.
-            var cursor = await UpsertNode(node, tx, ct).ConfigureAwait(false);
-            results.Add(cursor);
-            
+            ct.ThrowIfCancellationRequested();
+
+            var batchList = batch.ToList();
+            var cypher = BuildUpsertNodesBatchQuery(batchList);
+            var summary = await ExecuteWriteQuery(runner, cypher.Query, cypher.Parameters).ConfigureAwait(false);
+            results.Add(summary);
+            processedCount += batchList.Count;
+
             if (shouldThrottleLogging)
             {
-                processedCount++;
                 var currentMilestone = (processedCount / 100) * 100;
-                if (currentMilestone > lastLogged && currentMilestone > 0)
+                if (currentMilestone > lastLoggedMilestone && currentMilestone > 0)
                 {
                     _logger.LogInformation("Progress: {milestone} {label} nodes upserted", currentMilestone, labelName);
-                    lastLogged = currentMilestone;
+                    lastLoggedMilestone = currentMilestone;
                 }
             }
         }
@@ -166,13 +166,22 @@ public partial class Neo4jGenericRepo
         var query = BuildLoadQuery(label, pkName, relationships, $"{{ {pkName}: $id }}", null, null, false, null);
 
         await using var session = StartSession();
+        var started = Stopwatch.GetTimestamp();
         try
         {
-            var records = await session.ExecuteReadAsync(async tx =>
+            var records = await ExecuteReadWithTimeoutAsync(session, async tx =>
             {
                 var cursor = await tx.RunAsync(query, new { id });
                 return await cursor.ToListAsync(cancellationToken: ct);
             });
+
+            LogNeo4jOperationDebug(
+                $"LoadAsync<{typeof(T).Name}>",
+                started,
+                label: label,
+                resultCount: records.Count,
+                queryLength: query.Length,
+                parameterKeys: ["id"]);
 
             if (records.Count is 0) return null;
             var record = records[0];
@@ -188,7 +197,7 @@ public partial class Neo4jGenericRepo
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Failed loading node {Label}:{Id}", label, id);
-            throw new RepositoryException($"Failed loading node {label}:{id}", query, ["id"], ex);
+            throw CreateRepositoryException($"Failed loading node {label}:{id}", query, ["id"], ex);
         }
     }
 
@@ -212,13 +221,22 @@ public partial class Neo4jGenericRepo
         var query = BuildLoadQuery(label, pkName, rels, $"{{ {pkName}: $id }}", null, null, includeEdgeObjects, includeSet);
 
         await using var session = StartSession();
+        var started = Stopwatch.GetTimestamp();
         try
         {
-            var records = await session.ExecuteReadAsync(async tx =>
+            var records = await ExecuteReadWithTimeoutAsync(session, async tx =>
             {
                 var cursor = await tx.RunAsync(query, new { id });
                 return await cursor.ToListAsync(cancellationToken: ct);
             });
+
+            LogNeo4jOperationDebug(
+                $"LoadAsync<{typeof(T).Name}>",
+                started,
+                label: label,
+                resultCount: records.Count,
+                queryLength: query.Length,
+                parameterKeys: ["id"]);
 
             if (records.Count is 0) return null;
             var record = records[0];
@@ -275,13 +293,22 @@ public partial class Neo4jGenericRepo
         if (query.Contains("$take")) parameters["take"] = take;
 
         await using var session = StartSession();
+        var started = Stopwatch.GetTimestamp();
         try
         {
-            var records = await session.ExecuteReadAsync(async tx =>
+            var records = await ExecuteReadWithTimeoutAsync(session, async tx =>
             {
                 var cursor = await tx.RunAsync(query, parameters);
                 return await cursor.ToListAsync(cancellationToken: ct);
             });
+
+            LogNeo4jOperationDebug(
+                $"LoadAllAsync<{typeof(T).Name}>",
+                started,
+                label: label,
+                resultCount: records.Count,
+                queryLength: query.Length,
+                parameterKeys: parameters.Keys);
 
             if (records.Count is 0) return [];
             var results = new List<T>(records.Count);
@@ -301,7 +328,7 @@ public partial class Neo4jGenericRepo
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Failed loading all nodes for {Label}", label);
-            throw new RepositoryException($"Failed loading all nodes for {label}", query, [], ex);
+            throw CreateRepositoryException($"Failed loading all nodes for {label}", query, [], ex);
         }
     }
 
@@ -324,13 +351,22 @@ public partial class Neo4jGenericRepo
         if (query.Contains("$take")) parameters["take"] = take;
 
         await using var session = StartSession();
+        var started = Stopwatch.GetTimestamp();
         try
         {
-            var records = await session.ExecuteReadAsync(async tx =>
+            var records = await ExecuteReadWithTimeoutAsync(session, async tx =>
             {
                 var cursor = await tx.RunAsync(query, parameters);
                 return await cursor.ToListAsync(cancellationToken: ct);
             });
+
+            LogNeo4jOperationDebug(
+                $"LoadAllAsync<{typeof(T).Name}>",
+                started,
+                label: label,
+                resultCount: records.Count,
+                queryLength: query.Length,
+                parameterKeys: parameters.Keys);
 
             if (records.Count is 0) return [];
             var results = new List<T>(records.Count);
@@ -366,7 +402,7 @@ public partial class Neo4jGenericRepo
         if (node == null) throw new ArgumentNullException(nameof(node));
 
         await using var session = StartSession();
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = await BeginTransactionWithTimeoutAsync(session).ConfigureAwait(false);
         try
         {
             var result = await DetachDeleteAsync(node, tx, ct).ConfigureAwait(false);
@@ -399,7 +435,7 @@ public partial class Neo4jGenericRepo
         where T : GraphNode, new()
     {
         await using var session = StartSession();
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = await BeginTransactionWithTimeoutAsync(session).ConfigureAwait(false);
         try
         {
             var result = await DetachDeleteAsync<T>(pkValue, tx, ct).ConfigureAwait(false);
@@ -454,7 +490,7 @@ public partial class Neo4jGenericRepo
         where T : GraphNode, new()
     {
         await using var session = StartSession();
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = await BeginTransactionWithTimeoutAsync(session).ConfigureAwait(false);
         try
         {
             var result = await DetachDeleteManyAsync(nodes, tx, ct).ConfigureAwait(false);
@@ -487,7 +523,7 @@ public partial class Neo4jGenericRepo
         where T : GraphNode, new()
     {
         await using var session = StartSession();
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = await BeginTransactionWithTimeoutAsync(session).ConfigureAwait(false);
         try
         {
             var result = await DetachDeleteManyAsync<T>(ids, tx, ct).ConfigureAwait(false);
@@ -546,7 +582,7 @@ public partial class Neo4jGenericRepo
     {
         ct.ThrowIfCancellationRequested();
         await using var session = StartSession();
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = await BeginTransactionWithTimeoutAsync(session).ConfigureAwait(false);
         try
         {
             await DetachDeleteNodesByIdsAsync(label, ids, tx, ct).ConfigureAwait(false);
@@ -579,7 +615,7 @@ public partial class Neo4jGenericRepo
     {
         ArgumentNullException.ThrowIfNull(session);
         ct.ThrowIfCancellationRequested();
-        await using var tx = await session.BeginTransactionAsync().ConfigureAwait(false);
+        await using var tx = await BeginTransactionWithTimeoutAsync(session).ConfigureAwait(false);
         try
         {
             await DetachDeleteNodesByIdsAsync(label, ids, tx, ct).ConfigureAwait(false);
@@ -670,9 +706,29 @@ public partial class Neo4jGenericRepo
     }
 
     /// <inheritdoc/>
+    public async Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters, TimeSpan? transactionTimeout)
+    {
+        await using var session = StartSession();
+        return await ExecuteWriteAsync(query, parameters, session, transactionTimeout);
+    }
+
+    /// <inheritdoc/>
     public async Task<IResultSummary> ExecuteWriteAsync(string query, IDictionary<string, object>? parameters, IAsyncSession session)
     {
-        return await session.ExecuteWriteAsync(async tx => await ExecuteWriteQuery(tx, query, parameters ?? new Dictionary<string, object>()));
+        return await ExecuteWriteWithTimeoutAsync(session, async tx => await ExecuteWriteQuery(tx, query, parameters ?? new Dictionary<string, object>()));
+    }
+
+    /// <inheritdoc/>
+    public async Task<IResultSummary> ExecuteWriteAsync(
+        string query,
+        IDictionary<string, object>? parameters,
+        IAsyncSession session,
+        TimeSpan? transactionTimeout)
+    {
+        return await ExecuteWriteWithTimeoutAsync(
+            session,
+            async tx => await ExecuteWriteQuery(tx, query, parameters ?? new Dictionary<string, object>()),
+            transactionTimeout);
     }
 
     #endregion

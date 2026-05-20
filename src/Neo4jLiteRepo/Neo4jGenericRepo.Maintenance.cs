@@ -23,7 +23,7 @@ public partial class Neo4jGenericRepo
     public async Task<int> RemoveOrphansAsync<T>(IAsyncSession session, CancellationToken ct = default) where T : GraphNode, new()
     {
         if (session == null) throw new ArgumentNullException(nameof(session));
-        await using var tx = await session.BeginTransactionAsync();
+        await using var tx = await BeginTransactionWithTimeoutAsync(session);
         try
         {
             var result = await RemoveOrphansAsync<T>(tx, ct);
@@ -87,7 +87,7 @@ public partial class Neo4jGenericRepo
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "RemoveOrphansAsync failure. QueryLength={QueryLength}", cypher.Length);
-            throw new RepositoryException("Failed removing orphans.", cypher, ["label"], ex);
+            throw CreateRepositoryException("Failed removing orphans.", cypher, ["label"], ex);
         }
     }
 

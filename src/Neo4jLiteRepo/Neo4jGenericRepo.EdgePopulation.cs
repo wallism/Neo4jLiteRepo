@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Neo4j.Driver;
 using Neo4jLiteRepo.Attributes;
 using Neo4jLiteRepo.Helpers;
+using System.Diagnostics;
 using System.Reflection;
 
 namespace Neo4jLiteRepo;
@@ -41,6 +42,8 @@ public partial class Neo4jGenericRepo
         ct.ThrowIfCancellationRequested();
 
         var nodeType = typeof(T);
+        var started = Stopwatch.GetTimestamp();
+        var populatedRelationshipCount = 0;
         var properties = nodeType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
         // Build filter set if specified
@@ -125,10 +128,17 @@ public partial class Neo4jGenericRepo
             // Set the collection property
             var typedList = ConvertToTypedList(loadedObjects, targetType);
             targetCollectionProp.SetValue(node, typedList);
+            populatedRelationshipCount++;
 
             _logger.LogInformation("Populated {Count} {TargetType} objects for {NodeType}.{Property}",
                 loadedObjects.Count, targetTypeName, nodeType.Name, targetCollectionProp.Name);
         }
+
+        LogNeo4jOperationDebug(
+            $"PopulateEdgeObjectsAsync<{nodeType.Name}>",
+            started,
+            label: nodeType.Name,
+            resultCount: populatedRelationshipCount);
     }
 
     /// <summary>
@@ -158,6 +168,7 @@ public partial class Neo4jGenericRepo
 
         async Task<List<GraphNode>> ExecAsync(IAsyncQueryRunner runner)
         {
+            var started = Stopwatch.GetTimestamp();
             var cursor = await runner.RunAsync(query, parameters);
             var results = new List<GraphNode>();
 
@@ -171,6 +182,13 @@ public partial class Neo4jGenericRepo
                 results.Add(obj);
             }
 
+            LogNeo4jOperationDebug(
+                "BatchLoadNodesByIdsAsync",
+                started,
+                label: targetType.Name,
+                resultCount: results.Count,
+                queryLength: query.Length,
+                parameterKeys: parameters.Keys);
             return results;
         }
 
@@ -180,7 +198,7 @@ public partial class Neo4jGenericRepo
         }
 
         await using var session = StartSession();
-        return await session.ExecuteReadAsync(async rtx => await ExecAsync(rtx));
+        return await ExecuteReadWithTimeoutAsync(session, async rtx => await ExecAsync(rtx));
     }
 
     /// <summary>
@@ -250,8 +268,27 @@ public partial class Neo4jGenericRepo
         if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(List<>) &&
             targetType.GetGenericArguments()[0].FullName == "Neo4jLiteRepo.Models.SequenceText")
             return value.ConvertToSequenceTextList();
+        if (Nullable.GetUnderlyingType(targetType) is { } nullableStructType &&
+            nullableStructType != typeof(DateTimeOffset) &&
+            nullableStructType != typeof(DateTime) &&
+            nullableStructType != typeof(Guid) &&
+            !nullableStructType.IsEnum)
+        {
+            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToNullableStruct))!;
+            return helper.MakeGenericMethod(nullableStructType).Invoke(null, [value]);
+        }
+        if (targetType.IsValueType &&
+            targetType != typeof(DateTimeOffset) &&
+            targetType != typeof(DateTime) &&
+            targetType != typeof(Guid) &&
+            !targetType.IsEnum)
+        {
+            var helper = typeof(ValueConversionExtensions).GetMethod(nameof(ValueConversionExtensions.ConvertToStruct))!;
+            return helper.MakeGenericMethod(targetType).Invoke(null, [value]);
+        }
 
-        return Convert.ChangeType(value, targetType);
+        var effectiveType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+        return Convert.ChangeType(value, effectiveType);
     }
 
     /// <summary>

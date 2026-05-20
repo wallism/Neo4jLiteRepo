@@ -45,7 +45,7 @@ public partial class Neo4jGenericRepo
         List<string> result;
         try
         {
-            result = await session.ExecuteReadAsync(async tx =>
+            result = await ExecuteReadWithTimeoutAsync(session, async tx =>
             {
                 // Run the query
                 // Note: Neo4j driver requires embedding as List, not array
@@ -158,7 +158,7 @@ public partial class Neo4jGenericRepo
         catch (Exception ex)
         {
             _logger.LogError(ex, "Vector similarity search failed. QueryLength={QueryLength} ParamKeys=questionEmbedding,topK", query.Length);
-            throw new RepositoryException("Vector similarity search failed.", query, ["questionEmbedding", "topK"], ex);
+            throw CreateRepositoryException("Vector similarity search failed.", query, ["questionEmbedding", "topK"], ex);
         }
 
         return result;
@@ -180,7 +180,7 @@ public partial class Neo4jGenericRepo
         await using var session = StartSession();
         try
         {
-            var rows = await session.ExecuteReadAsync(async tx =>
+            var rows = await ExecuteReadWithTimeoutAsync(session, async tx =>
             {
                 var cursor = await tx.RunAsync(query, new
                 {
@@ -218,7 +218,7 @@ public partial class Neo4jGenericRepo
         catch (Exception ex)
         {
             _logger.LogError(ex, "Structured vector similarity search failed. QueryLength={QueryLength} ParamKeys=questionEmbedding,topK", query.Length);
-            throw new RepositoryException("Structured vector similarity search failed.", query, ["questionEmbedding", "topK"], ex);
+            throw CreateRepositoryException("Structured vector similarity search failed.", query, ["questionEmbedding", "topK"], ex);
         }
     }
 
