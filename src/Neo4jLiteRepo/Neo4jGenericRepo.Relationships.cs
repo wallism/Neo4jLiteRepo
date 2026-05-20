@@ -906,4 +906,33 @@ public partial class Neo4jGenericRepo
     }
 
     #endregion
+
+    #region Alias methods
+
+    /// <inheritdoc cref="UpsertRelationshipsAsync{T}(IEnumerable{T})"/>
+    public Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode
+        => UpsertRelationshipsAsync(fromNodes);
+
+    /// <inheritdoc cref="UpsertRelationshipsAsync{T}(T)"/>
+    public Task<bool> CreateRelationshipsAsync<T>(T node) where T : GraphNode
+        => UpsertRelationshipsAsync(node);
+
+    /// <inheritdoc cref="UpsertRelationshipsAsync{T}(T, IAsyncSession)"/>
+    public Task<bool> CreateRelationshipsAsync<T>(T node, IAsyncSession session) where T : GraphNode
+        => UpsertRelationshipsAsync(node, session);
+
+    /// <inheritdoc cref="LoadNodesViaPathNoEdgesAsync{TSource, TRelated}"/>
+    public Task<IReadOnlyList<TRelated>> LoadRelatedNodesAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4, IAsyncTransaction? tx = null,
+        CancellationToken ct = default)
+        where TSource : GraphNode, new()
+        where TRelated : GraphNode, new()
+        => LoadNodesViaPathNoEdgesAsync<TSource, TRelated>(sourceId, relationshipTypes, minHops, maxHops, tx, ct);
+
+    /// <inheritdoc cref="LoadNodeIdsViaPathNoEdgesAsync{TRelated}"/>
+    public Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
+        EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
+        where TRelated : GraphNode, new()
+        => LoadNodeIdsViaPathNoEdgesAsync<TRelated>(fromNode, relationshipTypes, minHops, maxHops, direction, tx, ct);
+
+    #endregion
 }

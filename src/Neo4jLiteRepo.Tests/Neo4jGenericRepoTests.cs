@@ -91,15 +91,19 @@ public class Neo4jGenericRepoTests
     {
         // Arrange
         var movie = new Movie { Id = "1", Title = "Test Movie", Released = 2023, Tagline = "A test movie" };
-        SetupTransactionRunAsync();
+        _mockSession.ExecuteWriteAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<IResultSummary>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>())
+            .Returns(_mockSummary);
 
         // Act
         await _repo.UpsertNode(movie);
 
         // Assert
         _mockDriver.Received(1).AsyncSession();
-        await _mockSession.Received(1).BeginTransactionAsync();
-        await _mockTransaction.Received(1).CommitAsync();
+        await _mockSession.Received(1).ExecuteWriteAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<IResultSummary>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>());
     }
 
     [Test]
@@ -107,15 +111,19 @@ public class Neo4jGenericRepoTests
     {
         // Arrange
         var movie = new Movie { Id = "1", Title = "Test Movie", Released = 2023, Tagline = "A test movie" };
-        SetupTransactionRunAsync();
+        _mockSession.ExecuteWriteAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<IResultSummary>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>())
+            .Returns(_mockSummary);
 
         // Act
         await _repo.UpsertNode(movie, _mockSession);
 
         // Assert
         _mockDriver.DidNotReceive().AsyncSession();
-        await _mockSession.Received(1).BeginTransactionAsync();
-        await _mockTransaction.Received(1).CommitAsync();
+        await _mockSession.Received(1).ExecuteWriteAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<IResultSummary>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>());
     }
 
     [Test]
@@ -154,16 +162,17 @@ public class Neo4jGenericRepoTests
     }
 
     [Test]
-    public async Task UpsertNode_OnException_RollsBackTransaction()
+    public void UpsertNode_OnException_RollsBackTransaction()
     {
         // Arrange
         var movie = new Movie { Id = "1", Title = "Test Movie", Released = 2023, Tagline = "A test movie" };
-        _mockTransaction.RunAsync(Arg.Any<string>(), Arg.Any<object>())
-            .Returns<IResultCursor>(_ => throw new Exception("Test exception"));
+        _mockSession.ExecuteWriteAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<IResultSummary>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>())
+            .Returns<IResultSummary>(_ => throw new Exception("Test exception"));
 
-        // Act & Assert
+        // Act & Assert - exception should propagate; rollback is handled internally by the driver's ExecuteWriteAsync
         Assert.ThrowsAsync<Exception>(async () => await _repo.UpsertNode(movie, _mockSession));
-        await _mockTransaction.Received(1).RollbackAsync();
     }
 
     [Test]
@@ -194,14 +203,19 @@ public class Neo4jGenericRepoTests
             new() { Id = "2", Title = "Movie 2", Released = 2022, Tagline = "Tag 2" },
             new() { Id = "3", Title = "Movie 3", Released = 2023, Tagline = "Tag 3" }
         };
-        SetupTransactionRunAsync();
+        _mockSession.ExecuteWriteAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<IEnumerable<IResultSummary>>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>())
+            .Returns(new List<IResultSummary> { _mockSummary });
 
         // Act
         var results = await _repo.UpsertNodes(movies);
 
-        // Assert
-        Assert.That(results.Count(), Is.EqualTo(3));
-        await _mockTransaction.Received(3).RunAsync(Arg.Any<string>(), Arg.Any<object>());
+        // Assert - 3 nodes are batched into 1 query (DefaultBatchSize = 500)
+        Assert.That(results, Is.Not.Empty);
+        await _mockSession.Received(1).ExecuteWriteAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<IEnumerable<IResultSummary>>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>());
     }
 
     [Test]
@@ -418,21 +432,27 @@ public class Neo4jGenericRepoTests
     public async Task ExecuteReadListAsync_UsesSessionExecuteReadAsync()
     {
         // Arrange - Mock ExecuteReadAsync to return an empty list
-        _mockSession.ExecuteReadAsync(Arg.Any<Func<IAsyncQueryRunner, Task<List<Movie>>>>())
+        _mockSession.ExecuteReadAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<List<Movie>>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>())
             .Returns(new List<Movie>());
 
         // Act
         var results = await _repo.ExecuteReadListAsync<Movie>("MATCH (m:Movie) RETURN m", "m");
 
         // Assert
-        await _mockSession.Received(1).ExecuteReadAsync(Arg.Any<Func<IAsyncQueryRunner, Task<List<Movie>>>>());
+        await _mockSession.Received(1).ExecuteReadAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<List<Movie>>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>());
     }
 
     [Test]
     public async Task ExecuteReadListAsync_WithSession_UsesProvidedSession()
     {
         // Arrange
-        _mockSession.ExecuteReadAsync(Arg.Any<Func<IAsyncQueryRunner, Task<List<Movie>>>>())
+        _mockSession.ExecuteReadAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<List<Movie>>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>())
             .Returns(new List<Movie>());
 
         // Act
@@ -440,7 +460,9 @@ public class Neo4jGenericRepoTests
 
         // Assert
         _mockDriver.DidNotReceive().AsyncSession(); // Should not create new session
-        await _mockSession.Received(1).ExecuteReadAsync(Arg.Any<Func<IAsyncQueryRunner, Task<List<Movie>>>>());
+        await _mockSession.Received(1).ExecuteReadAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<List<Movie>>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>());
     }
 
     #endregion
@@ -451,14 +473,18 @@ public class Neo4jGenericRepoTests
     public async Task ExecuteReadScalarAsync_UsesSessionExecuteReadAsync()
     {
         // Arrange - Mock ExecuteReadAsync to return a scalar value
-        _mockSession.ExecuteReadAsync(Arg.Any<Func<IAsyncQueryRunner, Task<long>>>())
+        _mockSession.ExecuteReadAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<long>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>())
             .Returns(42L);
 
         // Act
         var result = await _repo.ExecuteReadScalarAsync<long>("MATCH (m:Movie) RETURN count(m)");
 
         // Assert
-        await _mockSession.Received(1).ExecuteReadAsync(Arg.Any<Func<IAsyncQueryRunner, Task<long>>>());
+        await _mockSession.Received(1).ExecuteReadAsync(
+            Arg.Any<Func<IAsyncQueryRunner, Task<long>>>(),
+            Arg.Any<Action<TransactionConfigBuilder>>());
     }
 
     #endregion

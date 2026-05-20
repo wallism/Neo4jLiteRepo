@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="artifacts\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Remove="Queries\CreateVectorIndexForEmbeddings.cypher" />
     <None Remove="Queries\ExecuteVectorSimilaritySearch.cypher" />
     <None Remove="Queries\ExecuteVectorSimilaritySearchStructured.cypher" />

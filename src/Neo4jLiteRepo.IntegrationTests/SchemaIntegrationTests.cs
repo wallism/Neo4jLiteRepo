@@ -251,7 +251,7 @@ public class SchemaIntegrationTests : Neo4jIntegrationTestBase
         // Assert
         Assert.That(response, Is.Not.Null);
         Assert.That(response.NodeTypes, Is.Not.Empty);
-        Assert.That(response.QueriedAt, Is.Not.EqualTo(default(DateTime)));
+        Assert.That(response.QueriedAt, Is.Not.EqualTo(default(DateTimeOffset)));
         
         // Should contain Movie and Genre node types
         var nodeTypeNames = response.NodeTypes.Select(nt => nt.NodeType).ToList();

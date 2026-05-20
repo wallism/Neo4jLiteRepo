@@ -93,6 +93,21 @@ namespace Neo4jLiteRepo
         Task<bool> UpsertRelationshipsAsync<T>(T nodes, IAsyncSession session) where T : GraphNode;
 
         /// <summary>
+        /// Creates relationships for a collection of nodes (alias for UpsertRelationshipsAsync).
+        /// </summary>
+        Task<bool> CreateRelationshipsAsync<T>(IEnumerable<T> fromNodes) where T : GraphNode;
+
+        /// <summary>
+        /// Creates relationships for a single node (alias for UpsertRelationshipsAsync).
+        /// </summary>
+        Task<bool> CreateRelationshipsAsync<T>(T node) where T : GraphNode;
+
+        /// <summary>
+        /// Creates relationships for a node using the provided session (alias for UpsertRelationshipsAsync).
+        /// </summary>
+        Task<bool> CreateRelationshipsAsync<T>(T node, IAsyncSession session) where T : GraphNode;
+
+        /// <summary>
         /// Get a list of the names of all labels (node types) and their edges (in and out) as JSON.
         /// </summary>
         /// <remarks>Useful if you want to feed your graph map into AI.</remarks>
@@ -390,6 +405,21 @@ namespace Neo4jLiteRepo
         /// <param name="ct">Cancellation token.</param>
         /// <returns>Distinct related node id values (no nodes or edges loaded).</returns>
         Task<IReadOnlyList<string>> LoadNodeIdsViaPathNoEdgesAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
+            EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
+            where TRelated : GraphNode, new();
+
+        /// <summary>
+        /// Loads related nodes of type <typeparamref name="TRelated"/> reachable from a source node (alias for LoadNodesViaPathNoEdgesAsync).
+        /// </summary>
+        Task<IReadOnlyList<TRelated>> LoadRelatedNodesAsync<TSource, TRelated>(string sourceId, string relationshipTypes, int minHops = 1, int maxHops = 4, IAsyncTransaction? tx = null,
+            CancellationToken ct = default)
+            where TSource : GraphNode, new()
+            where TRelated : GraphNode, new();
+
+        /// <summary>
+        /// Loads the distinct ids of related nodes (alias for LoadNodeIdsViaPathNoEdgesAsync).
+        /// </summary>
+        Task<IReadOnlyList<string>> LoadRelatedNodeIdsAsync<TRelated>(GraphNode fromNode, string relationshipTypes, int minHops = 1, int maxHops = 4,
             EdgeDirection direction = EdgeDirection.Outgoing, IAsyncTransaction? tx = null, CancellationToken ct = default)
             where TRelated : GraphNode, new();
 

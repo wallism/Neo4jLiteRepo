@@ -31,11 +31,12 @@ builder.Configuration
 // register the Neo4j driver
 builder.Services.AddSingleton<IDriver>(_ =>
 {
-    var settings = new Neo4jSettings();
+    var settings = builder.Configuration.GetSection("Neo4jSettings").Get<Neo4jSettings>()
+        ?? new Neo4jSettings { User = "", Password = "", Database = "" };
     builder.Configuration.GetSection("Neo4jSettings").Bind(settings);
 
     var driver = GraphDatabase.Driver(
-        settings.Connection, AuthTokens.Basic(
+        settings.ConnectionUri, AuthTokens.Basic(
             settings.User,
             "password-for-unit-testing-db-only" // todo: revert to --> //settings.Password
     ));
