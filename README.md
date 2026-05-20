@@ -3,26 +3,29 @@
 Neo4jLiteRepo is a .NET library designed to simplify Neo4j database interactions by providing a clear, attribute-driven pattern for modeling, seeding, and querying graph data. It enables rapid onboarding for .NET developers and supports both local and AuraDB Neo4j instances.
 
 ## Project Structure
-- **Neo4jLiteRepo**: Core library with all essential functionality
+- **Neo4jLiteRepo**: Core library with all essential functionality (targets .NET 10)
 - **Neo4jLiteRepo.Importer**: Sample project demonstrating data import and configuration
-- **Neo4jLiteRepo.Sample**: Example node models and node services
+- **Neo4jLiteRepo.Sample**: Example node models, edge models, and node services
 - **Neo4jLiteRepo.Tests**: Unit tests for the library
+- **Neo4jLiteRepo.IntegrationTests**: Integration tests (CRUD, relationships, schema, maintenance, seeding)
+- **Node.Training**: Code generator that produces node classes and services from sample JSON data
 
 
-## Key Concepts & Recent Changes
+## Key Concepts
 
 ### Node Modeling (`GraphNode`)
 - All node models inherit from `GraphNode`.
 - Mark one property with `[NodePrimaryKey]` (must be unique).
 - Use `[NodeProperty]` for properties to be stored in Neo4j.
 - Use `[NodeRelationship<T>]` for relationship properties (must be `IEnumerable<string>` containing primary key values of related nodes).
-- Implement the abstract `BuildDisplayName()` method for each node.
-- **New:**
-  - Improved primary key handling: `GraphNode` now enforces that only one property is decorated with `[NodePrimaryKey]` and throws clear exceptions if not found or misused.
-  - Added `GetPrimaryKeyName()` and `GetPrimaryKeyValue()` for robust access to primary key info.
-  - Added `GetMainContent()` as an abstract method for custom node content extraction.
-  - `LabelName` and `NodeDisplayNameProperty` are now virtual and use helper extensions for casing.
+- Implement the abstract `BuildDisplayName()` and `GetMainContent()` methods for each node.
+- Features:
+  - Improved primary key handling: `GraphNode` enforces that only one property is decorated with `[NodePrimaryKey]` and throws clear exceptions if not found or misused.
+  - `GetPrimaryKeyName()` and `GetPrimaryKeyValue()` for robust access to primary key info.
+  - Static helpers: `GraphNode.GetPrimaryKeyName<T>()` and `GraphNode.GetLabelName<T>()`.
+  - `LabelName` and `NodeDisplayNameProperty` are virtual and use helper extensions for casing.
   - `Upserted` property tracks last upsert time (auto-set).
+  - `EnforceUniqueConstraint` virtual property (defaults to `true`).
 
 **Example:**
 ```csharp
@@ -58,7 +61,7 @@ builder.Services.AddSingleton<INodeService, MovieNodeService>();
 
 ### Repository Usage (`Neo4jGenericRepo`)
 - `Neo4jGenericRepo` is the main entry point for database operations (node/relationship upsert, Cypher queries, constraints).
-- **Recent API additions:**
+- **API Surface:**
   - **CRUD Operations:** `LoadAsync<T>`, `LoadAllAsync<T>` (with pagination support), `DetachDeleteAsync<T>`, `DetachDeleteManyAsync<T>`, and `DetachDeleteNodesByIdsAsync` for managing node lifecycle.
   - **Flexible API Architecture:** Most operations now support three usage patterns:
     1. **Standalone** (creates own session/transaction) - simplest for single operations
@@ -67,26 +70,42 @@ builder.Services.AddSingleton<INodeService, MovieNodeService>();
   - **Relationship Management:** `MergeRelationshipAsync`, `DeleteRelationshipAsync`, `DeleteEdgesAsync`, and `DeleteRelationshipsOfTypeFromAsync` with session/transaction overloads for fine-grained control.
   - **Maintenance Operations:** `RemoveOrphansAsync<T>` removes nodes with no relationships using efficient batch deletion.
   - **Advanced Querying:** `ExecuteReadListAsync<T>`, `ExecuteReadScalarAsync<T>`, `ExecuteReadStreamAsync<T>` for streaming large result sets, and vector similarity search methods.
-  - **Schema Management:** Methods for enforcing unique constraints, creating vector indexes for embeddings.
+  - **Schema Management:** `EnforceUniqueConstraintsForAllGraphNodes` (assembly-scanning), `CheckMissingConstraintsAsync` (dry-run), `GetGraphMapAsJsonAsync`, and vector index creation.
+  - **Edge Population:** `PopulateEdgeObjectsAsync<T>` hydrates edge object collections from relationship ID lists. `LoadRelatedAsync<TSource, TRelated>` combines path traversal with edge population.
+  - **Structured Vector Search:** `ExecuteVectorSimilaritySearchStructuredAsync` returns typed `StructuredVectorSearchRow` results.
   - Improved error handling and diagnostics for all operations.
+- **Interface Decomposition:** The repo implements focused interfaces (`INeo4jNodeCrudRepository`, `INeo4jReadRepository`, `INeo4jRelationshipRepository`, `INeo4jMaintenanceRepository`, `INeo4jSchemaRepository`, `INeo4jVectorSearchRepository`, `INeo4jSessionRepository`) for clean dependency injection.
 - **Performance Note:**
   - The repository passes parameters directly to Cypher queries for significant performance improvements.
   - Use session-based overloads to batch multiple operations efficiently.
   - Use transaction-based overloads when you need atomicity across multiple operations.
 - Prefer repository methods over custom Cypher unless advanced queries are needed.
 
-### Edge Modeling (`Edge` and `IEdge`)
-- The `Edge` class and `IEdge` interface represent relationships between nodes in the graph.
+### Edge Modeling (`CustomEdge`)
+- The `CustomEdge` abstract class represents relationships with custom properties between nodes.
 - **Key Features:**
-  - `TargetPrimaryKey`: Represents the primary key of the target node in the relationship.
-- Inherit from `Edge` when your edge requires custom properties.
+  - `GetFromId()` / `GetToId()` abstract methods identify the source and target nodes.
+  - Use `[EdgePropertyIgnore]` to exclude properties from edge serialization.
+  - Pass the edge seed type as the second argument to `[NodeRelationship<T>]` to associate an edge class with a relationship.
+- Edge objects can be populated on-demand via `PopulateEdgeObjectsAsync<T>()`.
 
 **Example:**
 ```csharp
-public class ActedIn : Edge
+public class MovieGenreEdge : CustomEdge
 {
-    public string Role { get; set; }
+    public override string GetFromId() => MovieId;
+    public override string GetToId() => GenreId;
+
+    public string MovieId { get; set; }
+    public string GenreId { get; set; }
+    public string SampleEdgeProperty { get; set; }
 }
+
+// On the node, reference the edge type:
+[NodeRelationship<Genre>("IN_GENRE", typeof(MovieGenreEdge))]
+public IEnumerable<string> GenreIds { get; set; } = [];
+
+public List<MovieGenreEdge>? InGenreEdges { get; set; }
 ```
 
 ## Core Operations
@@ -139,6 +158,34 @@ Keep your graph clean:
 var removedCount = await repo.RemoveOrphansAsync<Movie>();
 ```
 
+### Edge Population & Related Node Traversal
+Load related nodes across relationship paths, optionally hydrating edge objects:
+
+```csharp
+// Load related nodes via path traversal
+var genres = await repo.LoadRelatedNodesAsync<Movie, Genre>(movieId, "IN_GENRE", hops: 1);
+
+// Load related nodes with edge objects populated
+var genres = await repo.LoadRelatedAsync<Movie, Genre>(movieId, "IN_GENRE", hops: 1, includeEdgeObjects: true);
+
+// Populate edge objects on a node on-demand
+await repo.PopulateEdgeObjectsAsync(movie);
+```
+
+### Schema Management
+Enforce constraints and inspect the graph schema:
+
+```csharp
+// Assembly-scanning constraint enforcement (discovers all GraphNode types)
+await repo.EnforceUniqueConstraintsForAllGraphNodes();
+
+// Dry-run: check which constraints are missing without creating them
+var missing = await repo.CheckMissingConstraintsAsync();
+
+// Get full graph schema as JSON
+var schemaJson = await repo.GetGraphMapAsJsonAsync();
+```
+
 ## Getting Started
 
 ### 1. Set Up Neo4j
@@ -163,6 +210,8 @@ docker run -d --rm `
 
 volumedata/
 
+- **Neo4j Desktop**: [Download Neo4j Desktop](https://neo4j.com/download/). Create a new project and local DBMS instance. Use `neo4j://localhost:7687` as the connection string and the password you set during setup.
+
 ### 2. Configure Your Project
 - Copy the `Neo4jLiteRepo` project into your solution (NuGet not created yet).
 - Copy `.Importer` and optionally `.Sample` for reference.
@@ -174,7 +223,10 @@ volumedata/
     "Connection": "neo4j://localhost:7687", 
     "User": "neo4j",
     "Password": "your-password",
-    "DetachDeleteWhitelist": [ "TempNode", "TestData" ]
+    "Database": "neo4j",
+    "DetachDeleteWhitelist": [ "TempNode", "TestData" ],
+    "TransactionTimeoutSeconds": 120,
+    "MaxConnectionPoolSize": 100
   }
 }
 ```
@@ -231,12 +283,21 @@ RETURN n, r, m
 - Use UPPERCASE_WITH_UNDERSCORES for relationship names.
 - Only model child objects as separate nodes if they are reused, complex, or independently queried.
 - Always implement `BuildDisplayName()` and `GetMainContent()` for each node.
+- Use `CustomEdge` subclasses when relationships need custom properties.
 - Use C# raw string literals for multi-line strings.
 - Prefer idiomatic, readable C# over premature optimization.
 - Use repository overloads for efficient batching and atomic operations.
+- Use `EnforceUniqueConstraintsForAllGraphNodes()` for assembly-scanning constraint setup instead of manually passing services.
+
+## Key Dependencies
+- **.NET 10.0** target framework
+- **Neo4j.Driver** 5.28.4
+- **Newtonsoft.Json** 13.0.4
+- **Microsoft.Extensions.Configuration** 10.0.0
+- **Microsoft.Extensions.Logging.Abstractions** 10.0.0
 
 ## Logging & Configuration
-- The `.Importer` project uses [Serilog](https://github.com/serilog/serilog`) for logging (optional).
+- The `.Importer` project uses [Serilog](https://github.com/serilog/serilog) for logging (optional).
 - All Neo4j connection/configuration is handled via `appsettings.json`.
 
 ## Contributing
