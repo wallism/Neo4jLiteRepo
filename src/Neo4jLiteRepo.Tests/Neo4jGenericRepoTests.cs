@@ -482,6 +482,7 @@ public class Neo4jGenericRepoTests
         var result = await _repo.ExecuteReadScalarAsync<long>("MATCH (m:Movie) RETURN count(m)");
 
         // Assert
+        Assert.That(result, Is.EqualTo(42L));
         await _mockSession.Received(1).ExecuteReadAsync(
             Arg.Any<Func<IAsyncQueryRunner, Task<long>>>(),
             Arg.Any<Action<TransactionConfigBuilder>>());
