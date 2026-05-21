@@ -19,7 +19,6 @@
 
   <ItemGroup>
     <!-- Logging -->
-    <PackageReference Include="Serilog" Version="4.2.0" />
     <PackageReference Include="Serilog.Extensions.Logging" Version="9.0.1" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
     <PackageReference Include="Serilog.Sinks.Debug" Version="3.0.0" />
@@ -31,10 +30,8 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
     
     <!-- JSON Handling -->
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     
     <!-- Neo4j Driver -->
-    <PackageReference Include="Neo4j.Driver" Version="5.28.4" />
   </ItemGroup>
 
   <ItemGroup>
